@@ -64,6 +64,15 @@
                     <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
+                    {% if session.get('admin') %}
+                    <form method="post" action="{{ url_for('cluster_delete') }}" style="margin-left: auto;"
+                          onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
+                        <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
+                        <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
+                            Delete Cluster
+                        </button>
+                    </form>
+                    {% endif %}
                 </div>
                 <div class="vm-grid">
                     {% for vm in cluster_vms %}
@@ -121,6 +130,7 @@ sudo ./ocp-upi-deploy.sh 4.20.1 mycluster</code></pre>
 (function() {
     const API = "{{ url_for('api_status') }}";
     const dot = document.getElementById('live-dot');
+    const isAdmin = {{ 'true' if session.get('admin') else 'false' }};
 
     function updateDashboard() {
         fetch(API)
@@ -186,6 +196,11 @@ sudo ./ocp-upi-deploy.sh 4.20.1 mycluster</code></pre>
                     html += '<span class="cluster-dot"></span>';
                     html += '<span class="cluster-name">' + name + '</span>';
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
+                    if (isAdmin) {
+                        html += '<form method="post" action="/labs/cluster/delete" style="margin-left:auto;" onsubmit="return confirm(\'Delete cluster ' + name + '? This will destroy all VMs and storage.\');">';
+                        html += '<input type="hidden" name="cluster_name" value="' + name + '">';
+                        html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form>';
+                    }
                     html += '</div><div class="vm-grid">';
                     vms.forEach(vm => {
                         const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';
