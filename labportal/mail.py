@@ -19,17 +19,24 @@ http://{LAB_HOSTNAME}:8080/labs/admin
     _send(ADMIN_EMAIL, subject, body)
 
 
-def send_user_approved(user_email, user_name, admin_note=""):
+def send_user_approved(user_email, user_name, admin_note="", password=None):
     """Notify user their request was approved."""
     subject = f"[Lab Portal] Your access to {LAB_HOSTNAME} has been approved"
     note_line = f"\nNote from admin: {admin_note}\n" if admin_note else ""
+    creds = ""
+    if password:
+        creds = f"""
+Your login credentials:
+  Email:    {user_email}
+  Password: {password}
+
+Login at: http://{LAB_HOSTNAME}:8080/labs/user/login
+Please change your password after first login.
+"""
     body = f"""Hi {user_name},
 
 Your request for lab access to {LAB_HOSTNAME} has been approved.
-{note_line}
-You will receive your credentials separately. On first login you will
-be asked to change your password.
-
+{note_line}{creds}
 Lab portal: http://{LAB_HOSTNAME}:8080/labs
 
 Thanks,

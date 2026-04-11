@@ -12,7 +12,7 @@ from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, session, abort
+    flash, session, abort, jsonify
 )
 
 import config
@@ -99,6 +99,20 @@ def login_required(f):
     return decorated
 
 
+def user_login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_email"):
+            return redirect(url_for("user_login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def generate_password(length=12):
+    alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 def get_lab_status():
     """Query libvirt for VM list and system resources."""
     vms = []
@@ -157,8 +171,10 @@ def get_lab_status():
         pass
 
     try:
+        # Prefer /kvm mount; fall back to / if /kvm isn't mounted
+        disk_path = "/kvm" if os.path.ismount("/kvm") else "/"
         result = subprocess.run(
-            ["df", "-h", "/kvm"],
+            ["df", "-h", disk_path],
             capture_output=True, text=True, timeout=5
         )
         lines = result.stdout.strip().split("\n")
@@ -175,6 +191,16 @@ def get_lab_status():
 
 
 # --- Routes ---
+
+@app.route("/api/status")
+def api_status():
+    """JSON endpoint for live dashboard updates."""
+    vms, clusters, resources = get_lab_status()
+    clusters_data = {}
+    for name, cvms in clusters.items():
+        clusters_data[name] = cvms
+    return jsonify(vms=vms, clusters=clusters_data, resources=resources)
+
 
 @app.route("/")
 def index():
@@ -214,8 +240,18 @@ def request_access():
             return render_template("request_form.html", errors=errors,
                                    name=name, email=email, reason=reason)
 
-        # Check for duplicate pending requests
+        # Spam protection — one request per email per 24 hours
         conn = get_db()
+        recent = conn.execute(
+            "SELECT id FROM access_requests WHERE email=? AND created_at > datetime('now', '-24 hours')",
+            (email,)
+        ).fetchone()
+        if recent:
+            conn.close()
+            flash("You can only submit one request per 24 hours. Please try again later.", "warning")
+            return redirect(url_for("request_access"))
+
+        # Check for duplicate pending requests
         existing = conn.execute(
             "SELECT id FROM access_requests WHERE email=? AND status='pending'",
             (email,)
@@ -308,13 +344,192 @@ def admin_action(req_id):
     conn.close()
 
     if action == "approve":
-        send_user_approved(row["email"], row["name"], note)
-        flash(f"Approved request from {row['name']}. Notification sent.", "success")
+        # Create user account with generated password
+        password = generate_password()
+        pw_hash = hash_password(password)
+        conn2 = get_db()
+        existing_user = conn2.execute(
+            "SELECT id FROM users WHERE email=?", (row["email"],)
+        ).fetchone()
+        if existing_user:
+            conn2.execute(
+                "UPDATE users SET password_hash=?, is_active=1 WHERE email=?",
+                (pw_hash, row["email"])
+            )
+        else:
+            conn2.execute(
+                "INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)",
+                (row["email"], row["name"], pw_hash)
+            )
+        conn2.commit()
+        conn2.close()
+        send_user_approved(row["email"], row["name"], note, password=password)
+        flash(f"Approved request from {row['name']}. Account created, credentials emailed.", "success")
     else:
         send_user_denied(row["email"], row["name"], note)
         flash(f"Denied request from {row['name']}. Notification sent.", "info")
 
     return redirect(url_for("admin_panel"))
+
+
+# --- User Auth ---
+
+@app.route("/user/login", methods=["GET", "POST"])
+def user_login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        conn = get_db()
+        user = conn.execute(
+            "SELECT * FROM users WHERE email=? AND is_active=1", (email,)
+        ).fetchone()
+        conn.close()
+
+        if user and verify_password(password, user["password_hash"]):
+            session["user_email"] = user["email"]
+            session["user_name"] = user["name"]
+            if user["is_admin"]:
+                session["admin"] = True
+            return redirect(url_for("user_dashboard"))
+        else:
+            flash("Invalid email or password.", "danger")
+
+    return render_template("user_login.html")
+
+
+@app.route("/user/logout")
+def user_logout():
+    session.pop("user_email", None)
+    session.pop("user_name", None)
+    session.pop("admin", None)
+    return redirect(url_for("index"))
+
+
+@app.route("/user/dashboard")
+@user_login_required
+def user_dashboard():
+    vms, clusters, resources = get_lab_status()
+    conn = get_db()
+    deployments = conn.execute(
+        "SELECT * FROM deployments ORDER BY started_at DESC LIMIT 10"
+    ).fetchall()
+    conn.close()
+    return render_template("user_dashboard.html",
+                           vms=vms, clusters=clusters, resources=resources,
+                           deployments=deployments)
+
+
+# --- Cluster Management ---
+
+@app.route("/cluster/create", methods=["POST"])
+@user_login_required
+def cluster_create():
+    cluster_name = request.form.get("cluster_name", "").strip()
+    ocp_version = request.form.get("ocp_version", "").strip()
+
+    if not cluster_name or not ocp_version:
+        flash("Cluster name and OCP version are required.", "danger")
+        return redirect(url_for("user_dashboard"))
+
+    # Validate cluster name (alphanumeric + hyphens only)
+    if not all(c.isalnum() or c == "-" for c in cluster_name):
+        flash("Cluster name must contain only letters, numbers, and hyphens.", "danger")
+        return redirect(url_for("user_dashboard"))
+
+    # Check if cluster already exists
+    vms, clusters, _ = get_lab_status()
+    if cluster_name in clusters:
+        flash(f"Cluster '{cluster_name}' already exists.", "warning")
+        return redirect(url_for("user_dashboard"))
+
+    # Start deployment in background
+    log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"
+    try:
+        proc = subprocess.Popen(
+            ["/root/ocp-upi-deploy.sh", ocp_version, cluster_name],
+            stdout=open(log_file, "w"),
+            stderr=subprocess.STDOUT,
+            cwd="/root"
+        )
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file) "
+            "VALUES (?, ?, 'deploying', ?, ?, ?)",
+            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file)
+        )
+        conn.commit()
+        conn.close()
+        flash(f"Cluster '{cluster_name}' deployment started (OCP {ocp_version}). Check back for progress.", "success")
+    except Exception as e:
+        flash(f"Failed to start deployment: {e}", "danger")
+
+    return redirect(url_for("user_dashboard"))
+
+
+@app.route("/cluster/delete", methods=["POST"])
+@user_login_required
+def cluster_delete():
+    cluster_name = request.form.get("cluster_name", "").strip()
+    if not cluster_name:
+        flash("Cluster name is required.", "danger")
+        return redirect(url_for("user_dashboard"))
+
+    vms, clusters, _ = get_lab_status()
+    if cluster_name not in clusters:
+        flash(f"Cluster '{cluster_name}' not found.", "warning")
+        return redirect(url_for("user_dashboard"))
+
+    errors = []
+    for vm in clusters[cluster_name]:
+        try:
+            subprocess.run(["virsh", "destroy", vm["name"]],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+        try:
+            result = subprocess.run(
+                ["virsh", "undefine", vm["name"], "--remove-all-storage"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                errors.append(f"{vm['name']}: {result.stderr.strip()}")
+        except Exception as e:
+            errors.append(f"{vm['name']}: {e}")
+
+    # Mark deployment as deleted
+    conn = get_db()
+    conn.execute(
+        "UPDATE deployments SET status='deleted', finished_at=? WHERE cluster_name=? AND status IN ('deploying','completed')",
+        (datetime.utcnow().isoformat(), cluster_name)
+    )
+    conn.commit()
+    conn.close()
+
+    if errors:
+        flash(f"Cluster '{cluster_name}' partially deleted. Errors: {'; '.join(errors)}", "warning")
+    else:
+        flash(f"Cluster '{cluster_name}' deleted successfully.", "success")
+
+    return redirect(url_for("user_dashboard"))
+
+
+@app.route("/cluster/logs/<int:deploy_id>")
+@user_login_required
+def cluster_logs(deploy_id):
+    conn = get_db()
+    dep = conn.execute("SELECT * FROM deployments WHERE id=?", (deploy_id,)).fetchone()
+    conn.close()
+    if not dep or not dep["log_file"]:
+        abort(404)
+    try:
+        with open(dep["log_file"], "r") as f:
+            lines = f.readlines()
+            tail = lines[-100:] if len(lines) > 100 else lines
+        log_content = "".join(tail)
+    except FileNotFoundError:
+        log_content = "Log file not found."
+    return render_template("cluster_logs.html", deployment=dep, log_content=log_content)
 
 
 # --- CLI ---

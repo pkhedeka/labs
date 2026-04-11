@@ -30,9 +30,10 @@ MIRROR_URL="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/$VERSION"
 BRIDGE_IP="192.168.122.1"
 NETMASK="255.255.255.0"
 
-# Derive a per-cluster IP offset (100-240) from the cluster name to avoid collisions
-# This gives each cluster its own IP range within the 192.168.122.0/24 subnet
-IP_OFFSET=$(( ( $(echo -n "$CLUSTER_NAME" | cksum | awk '{print $1}') % 140 ) + 100 ))
+# IP offset — configurable via 3rd argument or IP_OFFSET env var.
+# Defaults to 110 for backward compatibility with existing DNS zones.
+# For parallel clusters, pass a different offset (e.g., ./ocp-upi-deploy.sh 4.20.1 lab 150)
+IP_OFFSET="${3:-${IP_OFFSET:-110}}"
 
 # Derive per-cluster MAC suffix from offset
 MAC_BASE=$(printf "%02x" "$IP_OFFSET")
@@ -154,47 +155,61 @@ echo ""
 mkdir -p "$BASE_DIR" "$INSTALL_DIR"
 
 # --- 1. TOOLS MANAGEMENT ---
+install_binary() {
+    local binary=$1
+    sudo cp "$BASE_DIR/$binary" "/usr/local/bin/${binary}.tmp.$$"
+    sudo chmod 0755 "/usr/local/bin/${binary}.tmp.$$"
+    # Atomic swap via mv — existing processes keep their fd to the old inode
+    sudo mv "/usr/local/bin/${binary}.tmp.$$" "/usr/local/bin/$binary"
+}
+
 check_and_get_tool() {
     local tool=$1; local binary=$2
+
+    # Already installed and matches this version — nothing to do
     if [[ -f "/usr/local/bin/$binary" ]] && [[ "$($binary version 2>/dev/null)" == *"$VERSION"* ]]; then
         echo "$binary $VERSION is already active."
-    else
-        echo "Downloading $tool..."
-        curl --fail -SL "$MIRROR_URL/${tool}-linux.tar.gz" -o "$BASE_DIR/${tool}.tar.gz"
+        return
+    fi
 
-        # Verify checksum if available
-        local sha_file="$BASE_DIR/${tool}-sha256.txt"
-        if curl --fail -sSL "$MIRROR_URL/sha256sum.txt" -o "$sha_file" 2>/dev/null; then
-            local expected
-            expected=$(grep "${tool}-linux.tar.gz" "$sha_file" | awk '{print $1}')
-            if [ -n "$expected" ]; then
-                local actual
-                actual=$(sha256sum "$BASE_DIR/${tool}.tar.gz" | awk '{print $1}')
-                if [ "$expected" != "$actual" ]; then
-                    echo "FAIL: Checksum mismatch for ${tool}-linux.tar.gz"
-                    echo "  Expected: $expected"
-                    echo "  Got:      $actual"
-                    exit 1
-                fi
-                echo "Checksum verified for $tool."
+    # Cached in BASE_DIR from a previous run — install without downloading
+    if [[ -f "$BASE_DIR/$binary" ]]; then
+        echo "$binary found in cache ($BASE_DIR), installing..."
+        install_binary "$binary"
+        if [[ "$binary" == "oc" ]] && [[ -f "$BASE_DIR/kubectl" ]]; then
+            install_binary "kubectl"
+        fi
+        return
+    fi
+
+    # Download, verify, extract, install
+    echo "Downloading $tool..."
+    curl --fail -SL "$MIRROR_URL/${tool}-linux.tar.gz" -o "$BASE_DIR/${tool}.tar.gz"
+
+    local sha_file="$BASE_DIR/${tool}-sha256.txt"
+    if curl --fail -sSL "$MIRROR_URL/sha256sum.txt" -o "$sha_file" 2>/dev/null; then
+        local expected
+        expected=$(grep "${tool}-linux.tar.gz" "$sha_file" | awk '{print $1}')
+        if [ -n "$expected" ]; then
+            local actual
+            actual=$(sha256sum "$BASE_DIR/${tool}.tar.gz" | awk '{print $1}')
+            if [ "$expected" != "$actual" ]; then
+                echo "FAIL: Checksum mismatch for ${tool}-linux.tar.gz"
+                echo "  Expected: $expected"
+                echo "  Got:      $actual"
+                exit 1
             fi
+            echo "Checksum verified for $tool."
         fi
+    fi
 
-        tar -xzf "$BASE_DIR/${tool}.tar.gz" -C "$BASE_DIR"
+    tar -xzf "$BASE_DIR/${tool}.tar.gz" -C "$BASE_DIR"
+    # Remove tarball after extraction to save disk space
+    rm -f "$BASE_DIR/${tool}.tar.gz" "$BASE_DIR/${tool}-sha256.txt"
 
-        # Atomic binary replacement using mv (rename syscall).
-        # cp truncates the destination in-place — if another process has the binary
-        # memory-mapped, it gets SIGBUS/SIGSEGV. mv does an inode swap, so existing
-        # processes keep their file descriptor to the old inode.
-        sudo cp "$BASE_DIR/$binary" "/usr/local/bin/${binary}.tmp.$$"
-        sudo chmod 0755 "/usr/local/bin/${binary}.tmp.$$"
-        sudo mv "/usr/local/bin/${binary}.tmp.$$" "/usr/local/bin/$binary"
-
-        if [[ "$binary" == "oc" ]]; then
-            sudo cp "$BASE_DIR/kubectl" "/usr/local/bin/kubectl.tmp.$$"
-            sudo chmod 0755 "/usr/local/bin/kubectl.tmp.$$"
-            sudo mv "/usr/local/bin/kubectl.tmp.$$" /usr/local/bin/kubectl
-        fi
+    install_binary "$binary"
+    if [[ "$binary" == "oc" ]] && [[ -f "$BASE_DIR/kubectl" ]]; then
+        install_binary "kubectl"
     fi
 }
 
@@ -202,24 +217,25 @@ check_and_get_tool "openshift-install" "openshift-install"
 check_and_get_tool "openshift-client" "oc"
 
 # --- 2. LIVE ISO RETRIEVAL ---
-echo "Querying RHCOS metadata for x86_64 Live ISO..."
-STREAM_JSON=$(openshift-install coreos print-stream-json)
-
-# Parse JSON for the ISO URL — prefer jq, fall back to python3
-if command -v jq &>/dev/null; then
-    ISO_URL=$(echo "$STREAM_JSON" | jq -r '.architectures.x86_64.artifacts.metal.formats.iso.disk.location')
-else
-    ISO_URL=$(echo "$STREAM_JSON" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data['architectures']['x86_64']['artifacts']['metal']['formats']['iso']['disk']['location'])")
-fi
-
-if [ -z "$ISO_URL" ] || [ "$ISO_URL" = "null" ]; then
-    echo "FAIL: Could not extract ISO URL from coreos stream metadata."
-    exit 1
-fi
-
 MASTER_TEMPLATE_ISO="$BASE_DIR/rhcos-live-MASTER.iso"
 
-if [ ! -f "$MASTER_TEMPLATE_ISO" ]; then
+if [ -f "$MASTER_TEMPLATE_ISO" ]; then
+    echo "Using cached RHCOS ISO: $MASTER_TEMPLATE_ISO"
+else
+    echo "Querying RHCOS metadata for x86_64 Live ISO..."
+    STREAM_JSON=$(openshift-install coreos print-stream-json)
+
+    # Parse JSON for the ISO URL — prefer jq, fall back to python3
+    if command -v jq &>/dev/null; then
+        ISO_URL=$(echo "$STREAM_JSON" | jq -r '.architectures.x86_64.artifacts.metal.formats.iso.disk.location')
+    else
+        ISO_URL=$(echo "$STREAM_JSON" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data['architectures']['x86_64']['artifacts']['metal']['formats']['iso']['disk']['location'])")
+    fi
+
+    if [ -z "$ISO_URL" ] || [ "$ISO_URL" = "null" ]; then
+        echo "FAIL: Could not extract ISO URL from coreos stream metadata."
+        exit 1
+    fi
     echo "Downloading Master ISO template..."
     curl --fail -SL -o "$MASTER_TEMPLATE_ISO" "$ISO_URL"
 
@@ -312,6 +328,9 @@ deploy_node() {
         exit 1
     fi
 
+    # Remove stale SSH host keys for this IP (VMs get new keys each deploy)
+    ssh-keygen -R "$ip" 2>/dev/null || true
+
     echo "Provisioning VM: $name"
     virsh destroy "$name" 2>/dev/null || true
     virsh undefine "$name" --remove-all-storage 2>/dev/null || true
@@ -348,12 +367,12 @@ deploy_node() {
 # --- 5. EXECUTION LOOP ---
 # Per-cluster VM names, MACs, and IPs derived from CLUSTER_NAME + IP_OFFSET
 # Usage: Name | RAM | CPU | MAC | Role | IP | Hostname
-deploy_node "${VM_PREFIX}-boot" 16384 4 "52:54:00:${MAC_BASE}:00:10" "bootstrap" "192.168.122.$(( IP_OFFSET ))"     "bootstrap.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-m0"   16384 4 "52:54:00:${MAC_BASE}:00:11" "master"    "192.168.122.$(( IP_OFFSET + 1 ))" "master-0.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-m1"   16384 4 "52:54:00:${MAC_BASE}:00:12" "master"    "192.168.122.$(( IP_OFFSET + 2 ))" "master-1.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-m2"   16384 4 "52:54:00:${MAC_BASE}:00:13" "master"    "192.168.122.$(( IP_OFFSET + 3 ))" "master-2.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-w0"   8192  2 "52:54:00:${MAC_BASE}:00:14" "worker"    "192.168.122.$(( IP_OFFSET + 4 ))" "worker-0.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-w1"   8192  2 "52:54:00:${MAC_BASE}:00:15" "worker"    "192.168.122.$(( IP_OFFSET + 5 ))" "worker-1.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-boot" 32768 8  "52:54:00:${MAC_BASE}:00:10" "bootstrap" "192.168.122.$(( IP_OFFSET ))"     "bootstrap.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-m0"   32768 8  "52:54:00:${MAC_BASE}:00:11" "master"    "192.168.122.$(( IP_OFFSET + 1 ))" "master-0.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-m1"   32768 8  "52:54:00:${MAC_BASE}:00:12" "master"    "192.168.122.$(( IP_OFFSET + 2 ))" "master-1.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-m2"   32768 8  "52:54:00:${MAC_BASE}:00:13" "master"    "192.168.122.$(( IP_OFFSET + 3 ))" "master-2.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-w0"   16384 4  "52:54:00:${MAC_BASE}:00:14" "worker"    "192.168.122.$(( IP_OFFSET + 4 ))" "worker-0.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-w1"   16384 4  "52:54:00:${MAC_BASE}:00:15" "worker"    "192.168.122.$(( IP_OFFSET + 5 ))" "worker-1.${CLUSTER_NAME}.example.com"
 
 # --- 6. MONITORING & CSR APPROVAL ---
 export KUBECONFIG="$INSTALL_DIR/auth/kubeconfig"

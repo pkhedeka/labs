@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Logs — {{ deployment.cluster_name }}{% endblock %}
+{% block content %}
+<div style="margin-bottom: 1rem;">
+    <a href="{{ url_for('user_dashboard') }}" class="pf-v5-c-button pf-m-link" style="padding: 0;">&larr; Back to Dashboard</a>
+</div>
+
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2>{{ deployment.cluster_name }} &mdash; OCP {{ deployment.ocp_version }}</h2>
+        <span class="cluster-badge {{ 'badge-ok' if deployment.status == 'completed' else 'badge-warn' }}">
+            {{ deployment.status }}
+        </span>
+    </div>
+    <div class="dash-card-body" style="padding: 0;">
+        <pre class="code-block" style="max-height: 600px; overflow-y: auto; margin: 0; border-radius: 0;"><code id="log-output">{{ log_content }}</code></pre>
+    </div>
+</div>
+
+{% if deployment.status == 'deploying' %}
+<script>
+(function() {
+    const logEl = document.getElementById('log-output');
+    function refreshLogs() {
+        fetch(window.location.href)
+            .then(r => r.text())
+            .then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newLog = doc.getElementById('log-output');
+                if (newLog) {
+                    logEl.textContent = newLog.textContent;
+                    logEl.parentElement.scrollTop = logEl.parentElement.scrollHeight;
+                }
+            })
+            .catch(() => {});
+    }
+    setInterval(refreshLogs, 5000);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Login — OCP Lab Portal{% endblock %}
+{% block content %}
+<div class="pf-v5-l-bullseye">
+    <div class="pf-v5-c-card" style="width: 420px; margin-top: 3rem;">
+        <div class="pf-v5-c-card__title">
+            <h1 class="pf-v5-c-card__title-text">Login</h1>
+        </div>
+        <div class="pf-v5-c-card__body">
+            <p style="color: #888; margin-bottom: 1.25rem; font-size: 0.9rem;">
+                Sign in with the credentials sent to your @redhat.com email.
+            </p>
+            <form method="post" action="{{ url_for('user_login') }}" class="pf-v5-c-form">
+                <div class="pf-v5-c-form__group">
+                    <label class="pf-v5-c-form__label" for="email">
+                        <span class="pf-v5-c-form__label-text">Email</span>
+                    </label>
+                    <div class="pf-v5-c-form__group-control">
+                        <input class="pf-v5-c-form-control" type="email" id="email" name="email"
+                               required autofocus placeholder="you@redhat.com">
+                    </div>
+                </div>
+
+                <div class="pf-v5-c-form__group">
+                    <label class="pf-v5-c-form__label" for="password">
+                        <span class="pf-v5-c-form__label-text">Password</span>
+                    </label>
+                    <div class="pf-v5-c-form__group-control">
+                        <input class="pf-v5-c-form-control" type="password" id="password" name="password" required>
+                    </div>
+                </div>
+
+                <div class="pf-v5-c-form__group pf-m-action">
+                    <div class="pf-v5-c-form__actions">
+                        <button class="pf-v5-c-button pf-m-primary" type="submit">Log in</button>
+                        <a href="{{ url_for('request_access') }}" class="pf-v5-c-button pf-m-link">Request Access</a>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

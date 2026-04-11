@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — OCP Lab Portal{% endblock %}
+{% block content %}
+<div style="text-align: center; padding: 0.75rem 0; margin-bottom: 0.5rem;">
+    <h1 style="color: #ee0000; font-size: 1.4rem; margin: 0; font-weight: 800; font-family: 'Red Hat Display', sans-serif; letter-spacing: 0.02em;">
+        Welcome, {{ session.get('user_name', 'User') }}
+    </h1>
+</div>
+
+<!-- System Resources -->
+<div class="dash-card" id="resources-card">
+    <div class="dash-card-header">
+        <h2>System Resources</h2>
+        <span class="live-indicator" id="live-dot">LIVE</span>
+    </div>
+    <div class="dash-resources" id="resources-container">
+        {% if resources %}
+        <div class="resource-tile">
+            <div class="resource-ring" data-pct="{{ ((resources.ram_used|int * 100) / (resources.ram_total|int if resources.ram_total|int > 0 else 1))|int }}">
+                <svg viewBox="0 0 36 36">
+                    <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    <path class="ring-fill" stroke-dasharray="{{ ((resources.ram_used|int * 100) / (resources.ram_total|int if resources.ram_total|int > 0 else 1))|int }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                </svg>
+                <span class="ring-text">{{ resources.ram_used }}G</span>
+            </div>
+            <span class="resource-label">RAM</span>
+            <span class="resource-sub">of {{ resources.ram_total }}G</span>
+        </div>
+        <div class="resource-tile">
+            <div class="resource-ring" data-pct="{{ resources.disk_pct|replace('%','')|int if resources.disk_pct else 0 }}">
+                <svg viewBox="0 0 36 36">
+                    <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    <path class="ring-fill" stroke-dasharray="{{ resources.disk_pct|replace('%','')|int if resources.disk_pct else 0 }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                </svg>
+                <span class="ring-text">{{ resources.disk_used }}</span>
+            </div>
+            <span class="resource-label">Storage</span>
+            <span class="resource-sub">of {{ resources.disk_total }}</span>
+        </div>
+        <div class="resource-tile">
+            <div class="resource-big-num">{{ resources.cpus }}</div>
+            <span class="resource-label">CPUs</span>
+            <span class="resource-sub">available</span>
+        </div>
+        <div class="resource-tile">
+            <div class="resource-big-num" id="vm-count">{{ vms|length }}</div>
+            <span class="resource-label">VMs</span>
+            <span class="resource-sub" id="vm-running-count">{{ vms|selectattr('state', 'equalto', 'running')|list|length }} running</span>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Create Cluster -->
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2>Deploy New Cluster</h2>
+    </div>
+    <div class="dash-card-body">
+        <form method="post" action="{{ url_for('cluster_create') }}" class="pf-v5-c-form" style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+            <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
+                <label class="pf-v5-c-form__label" for="ocp_version">
+                    <span class="pf-v5-c-form__label-text">OCP Version</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="ocp_version" name="ocp_version"
+                           required placeholder="e.g. 4.20.1" pattern="[0-9]+\.[0-9]+\.[0-9]+">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
+                <label class="pf-v5-c-form__label" for="cluster_name">
+                    <span class="pf-v5-c-form__label-text">Cluster Name</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="cluster_name" name="cluster_name"
+                           required placeholder="e.g. dev01" pattern="[a-zA-Z0-9\-]+">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group">
+                <button class="pf-v5-c-button pf-m-primary" type="submit">Deploy Cluster</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Active Clusters -->
+<div class="dash-card" id="clusters-card">
+    <div class="dash-card-header">
+        <h2>Active Clusters</h2>
+    </div>
+    <div id="clusters-container">
+        {% if clusters %}
+            {% for cluster_name, cluster_vms in clusters.items() %}
+            <div class="cluster-group">
+                <div class="cluster-header">
+                    <span class="cluster-dot"></span>
+                    <span class="cluster-name">{{ cluster_name }}</span>
+                    <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
+                        {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
+                    </span>
+                    <form method="post" action="{{ url_for('cluster_delete') }}" style="margin-left: auto;"
+                          onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
+                        <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
+                        <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
+                            Delete Cluster
+                        </button>
+                    </form>
+                </div>
+                <div class="vm-grid">
+                    {% for vm in cluster_vms %}
+                    <div class="vm-tile {{ 'vm-running' if vm.state == 'running' else 'vm-off' }}">
+                        <div class="vm-name">{{ vm.name }}</div>
+                        <div class="vm-role">
+                            {% if 'boot' in vm.name %}bootstrap
+                            {% elif '-m' in vm.name %}master
+                            {% elif '-w' in vm.name %}worker
+                            {% else %}vm{% endif %}
+                        </div>
+                        <div class="vm-state">
+                            <span class="state-dot {{ 'dot-green' if vm.state == 'running' else 'dot-red' }}"></span>
+                            {{ vm.state }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty-clusters">
+            <p>No clusters deployed. Use the form above to deploy one.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Deployment History -->
+{% if deployments %}
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2>Deployment History</h2>
+    </div>
+    <div class="dash-card-body" style="padding: 0;">
+        <table class="pf-v5-c-table pf-m-compact" style="width: 100%;">
+            <thead class="pf-v5-c-table__thead">
+                <tr>
+                    <th class="pf-v5-c-table__th">Cluster</th>
+                    <th class="pf-v5-c-table__th">Version</th>
+                    <th class="pf-v5-c-table__th">Status</th>
+                    <th class="pf-v5-c-table__th">Started</th>
+                    <th class="pf-v5-c-table__th">By</th>
+                    <th class="pf-v5-c-table__th">Logs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for dep in deployments %}
+                <tr class="pf-v5-c-table__tr">
+                    <td class="pf-v5-c-table__td" style="font-family: 'Red Hat Mono', monospace;">{{ dep.cluster_name }}</td>
+                    <td class="pf-v5-c-table__td">{{ dep.ocp_version }}</td>
+                    <td class="pf-v5-c-table__td">
+                        <span class="cluster-badge {{ 'badge-ok' if dep.status == 'completed' else ('badge-warn' if dep.status == 'deploying' else '') }}" style="font-size: 0.7rem;">
+                            {{ dep.status }}
+                        </span>
+                    </td>
+                    <td class="pf-v5-c-table__td" style="font-size: 0.8rem;">{{ dep.started_at }}</td>
+                    <td class="pf-v5-c-table__td" style="font-size: 0.8rem;">{{ dep.started_by or '-' }}</td>
+                    <td class="pf-v5-c-table__td">
+                        {% if dep.log_file %}
+                        <a href="{{ url_for('cluster_logs', deploy_id=dep.id) }}" class="pf-v5-c-button pf-m-link pf-m-small" style="font-size: 0.75rem;">View Logs</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<script>
+(function() {
+    const API = "{{ url_for('api_status') }}";
+    const dot = document.getElementById('live-dot');
+
+    function updateDashboard() {
+        fetch(API)
+            .then(r => r.json())
+            .then(data => {
+                dot.classList.add('live-pulse');
+                setTimeout(() => dot.classList.remove('live-pulse'), 800);
+
+                // Update resources
+                const res = data.resources;
+                if (res) {
+                    const rc = document.getElementById('resources-container');
+                    if (rc) {
+                        const ramPct = res.ram_total > 0 ? Math.round((res.ram_used * 100) / res.ram_total) : 0;
+                        const diskPct = res.disk_pct ? parseInt(res.disk_pct) : 0;
+                        const running = data.vms.filter(v => v.state === 'running').length;
+                        rc.innerHTML =
+                            '<div class="resource-tile"><div class="resource-ring"><svg viewBox="0 0 36 36"><path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/><path class="ring-fill" stroke-dasharray="' + ramPct + ', 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/></svg><span class="ring-text">' + res.ram_used + 'G</span></div><span class="resource-label">RAM</span><span class="resource-sub">of ' + res.ram_total + 'G</span></div>' +
+                            '<div class="resource-tile"><div class="resource-ring"><svg viewBox="0 0 36 36"><path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/><path class="ring-fill" stroke-dasharray="' + diskPct + ', 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/></svg><span class="ring-text">' + res.disk_used + '</span></div><span class="resource-label">Storage</span><span class="resource-sub">of ' + res.disk_total + '</span></div>' +
+                            '<div class="resource-tile"><div class="resource-big-num">' + res.cpus + '</div><span class="resource-label">CPUs</span><span class="resource-sub">available</span></div>' +
+                            '<div class="resource-tile"><div class="resource-big-num">' + data.vms.length + '</div><span class="resource-label">VMs</span><span class="resource-sub">' + running + ' running</span></div>';
+                    }
+                }
+
+                // Rebuild clusters (keep delete buttons)
+                const container = document.getElementById('clusters-container');
+                const clusterNames = Object.keys(data.clusters);
+                if (clusterNames.length === 0) {
+                    container.innerHTML = '<div class="empty-clusters"><p>No clusters deployed. Use the form above to deploy one.</p></div>';
+                    return;
+                }
+                let html = '';
+                clusterNames.forEach(name => {
+                    const vms = data.clusters[name];
+                    const runCount = vms.filter(v => v.state === 'running').length;
+                    const badgeClass = runCount === vms.length ? 'badge-ok' : 'badge-warn';
+                    html += '<div class="cluster-group"><div class="cluster-header">';
+                    html += '<span class="cluster-dot"></span>';
+                    html += '<span class="cluster-name">' + name + '</span>';
+                    html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
+                    html += '<form method="post" action="/labs/cluster/delete" style="margin-left:auto;" onsubmit="return confirm(\'Delete cluster ' + name + '?\');">';
+                    html += '<input type="hidden" name="cluster_name" value="' + name + '">';
+                    html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form>';
+                    html += '</div><div class="vm-grid">';
+                    vms.forEach(vm => {
+                        const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';
+                        const dotClass = vm.state === 'running' ? 'dot-green' : 'dot-red';
+                        let role = 'vm';
+                        if (vm.name.includes('boot')) role = 'bootstrap';
+                        else if (vm.name.includes('-m')) role = 'master';
+                        else if (vm.name.includes('-w')) role = 'worker';
+                        html += '<div class="vm-tile ' + stateClass + '"><div class="vm-name">' + vm.name + '</div>';
+                        html += '<div class="vm-role">' + role + '</div>';
+                        html += '<div class="vm-state"><span class="state-dot ' + dotClass + '"></span>' + vm.state + '</div></div>';
+                    });
+                    html += '</div></div>';
+                });
+                container.innerHTML = html;
+            })
+            .catch(() => {});
+    }
+    setInterval(updateDashboard, 5000);
+})();
+</script>
+{% endblock %}
