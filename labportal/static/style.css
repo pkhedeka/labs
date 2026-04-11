@@ -1,49 +1,232 @@
 /* Lab Portal — PatternFly overrides and custom styles */
 
+/* Page structure */
+body.pf-v5-c-page {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background-color: #151515;
+}
+
+.pf-v5-c-page__main {
+    flex: 1;
+    background-color: #1a1a1a;
+}
+
+.pf-v5-c-page__main-section {
+    padding: 2rem 3rem;
+    background-color: transparent;
+}
+
+/* Masthead */
 .pf-v5-c-masthead {
-    --pf-v5-c-masthead--BackgroundColor: #151515;
+    --pf-v5-c-masthead--BackgroundColor: #0f0f0f;
+    border-bottom: 2px solid #ee0000;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .pf-v5-c-masthead__brand {
     color: #fff;
     text-decoration: none;
-    font-size: 1.1rem;
+    font-size: 1.2rem;
     font-weight: 700;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.6rem;
+    letter-spacing: 0.02em;
 }
 
 .brand-dot {
     display: inline-block;
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     background: #ee0000;
     border-radius: 50%;
+    box-shadow: 0 0 6px rgba(238, 0, 0, 0.5);
 }
 
 .pf-v5-c-masthead__content .pf-v5-c-nav__link {
-    color: #d2d2d2;
+    color: #a0a0a0;
+    transition: color 0.15s;
 }
 .pf-v5-c-masthead__content .pf-v5-c-nav__link:hover {
     color: #fff;
 }
 
-.pf-v5-c-page__main-section {
-    padding: 1.5rem 2rem;
+/* Cards — dark theme */
+.pf-v5-c-card {
+    background-color: #212427;
+    border: 1px solid #333;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    transition: box-shadow 0.2s, border-color 0.2s;
 }
 
-.portal-footer {
-    text-align: center;
-    padding: 1rem;
-    color: var(--pf-v5-global--Color--200);
-    font-size: 0.85rem;
-    border-top: 1px solid var(--pf-v5-global--BorderColor--100);
-    margin-top: auto;
+.pf-v5-c-card:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    border-color: #444;
 }
 
-/* Card title accent */
 .pf-v5-c-card__title-text {
     border-bottom: 2px solid #ee0000;
     padding-bottom: 0.5rem;
+    color: #fff;
+}
+
+.pf-v5-c-card__body {
+    color: #c9c9c9;
+}
+
+.pf-v5-c-card__body p {
+    color: #b0b0b0;
+}
+
+/* Content text */
+.pf-v5-c-content h1,
+.pf-v5-c-content h2 {
+    color: #fff;
+}
+
+.pf-v5-c-content p {
+    color: #b0b0b0;
+}
+
+/* Description list */
+.pf-v5-c-description-list__term span {
+    color: #8a8d90;
+}
+
+.pf-v5-c-description-list__description span {
+    color: #e0e0e0;
+    font-weight: 600;
+}
+
+/* Code block */
+.pf-v5-c-code-block {
+    background-color: #0f0f0f;
+    border: 1px solid #333;
+    border-radius: 4px;
+}
+
+.pf-v5-c-code-block__pre code {
+    color: #06c;
+    color: #73bcf7;
+}
+
+/* Tables */
+.pf-v5-c-table {
+    background-color: #212427;
+}
+
+.pf-v5-c-table__thead {
+    background-color: #1a1a1a;
+}
+
+.pf-v5-c-table__th {
+    color: #b0b0b0;
+}
+
+.pf-v5-c-table__td {
+    color: #d2d2d2;
+    border-bottom-color: #333;
+}
+
+.pf-v5-c-table__tr:hover {
+    background-color: #2a2d30;
+}
+
+/* Forms — dark theme */
+.pf-v5-c-form__label-text {
+    color: #d2d2d2;
+}
+
+.pf-v5-c-form-control {
+    background-color: #1a1a1a;
+    border-color: #444;
+    color: #e0e0e0;
+}
+
+.pf-v5-c-form-control:focus {
+    border-color: #73bcf7;
+    outline: none;
+    box-shadow: 0 0 0 1px #73bcf7;
+}
+
+.pf-v5-c-form-control::placeholder {
+    color: #6a6e73;
+}
+
+.pf-v5-c-helper-text__item-text {
+    color: #8a8d90;
+}
+
+/* Buttons */
+.pf-v5-c-button.pf-m-primary {
+    background-color: #ee0000;
+    border-color: #ee0000;
+}
+
+.pf-v5-c-button.pf-m-primary:hover {
+    background-color: #cc0000;
+    border-color: #cc0000;
+}
+
+.pf-v5-c-button.pf-m-secondary {
+    color: #d2d2d2;
+    border-color: #555;
+}
+
+.pf-v5-c-button.pf-m-secondary:hover {
+    background-color: #333;
+    color: #fff;
+}
+
+.pf-v5-c-button.pf-m-link {
+    color: #73bcf7;
+}
+
+/* Toolbar */
+.pf-v5-c-toolbar {
+    background-color: transparent;
+}
+
+/* Labels */
+.pf-v5-c-label.pf-m-outline {
+    border-color: #555;
+    color: #d2d2d2;
+}
+
+/* Empty state */
+.pf-v5-c-empty-state {
+    color: #b0b0b0;
+}
+
+.pf-v5-c-empty-state__title-text {
+    color: #d2d2d2;
+}
+
+/* Alerts */
+.pf-v5-c-alert {
+    border-radius: 4px;
+}
+
+/* Footer */
+.portal-footer {
+    text-align: center;
+    padding: 1rem;
+    color: #6a6e73;
+    font-size: 0.85rem;
+    border-top: 1px solid #333;
+    margin-top: auto;
+    background-color: #0f0f0f;
+}
+
+/* Bullseye layout */
+.pf-v5-l-bullseye {
+    min-height: 60vh;
+}
+
+/* Gallery spacing */
+.pf-v5-l-gallery {
+    padding: 1rem 0;
 }

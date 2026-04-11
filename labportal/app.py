@@ -20,7 +20,23 @@ from mail import send_admin_notification, send_user_approved, send_user_denied
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
-app.config["APPLICATION_ROOT"] = "/labs"
+
+
+class PrefixMiddleware:
+    """Make Flask aware it's served under /labs via reverse proxy."""
+    def __init__(self, wsgi_app, prefix="/labs"):
+        self.wsgi_app = wsgi_app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        environ["SCRIPT_NAME"] = self.prefix
+        path = environ.get("PATH_INFO", "")
+        if path.startswith(self.prefix):
+            environ["PATH_INFO"] = path[len(self.prefix):]
+        return self.wsgi_app(environ, start_response)
+
+
+app.wsgi_app = PrefixMiddleware(app.wsgi_app, prefix="/labs")
 
 
 # --- Helpers ---
