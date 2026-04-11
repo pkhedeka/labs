@@ -223,10 +223,43 @@ body.pf-v5-c-page {
 
 /* Bullseye layout */
 .pf-v5-l-bullseye {
-    min-height: 60vh;
+    min-height: auto;
 }
 
 /* Gallery spacing */
 .pf-v5-l-gallery {
     padding: 1rem 0;
+}
+
+/* Resource blocks */
+.resource-block {
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+    padding: 0.75rem 1rem;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+}
+
+.resource-label {
+    font-size: 0.75rem;
+    color: #8a8d90;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+}
+
+.resource-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #e0e0e0;
+    font-family: monospace;
+}
+
+/* Compact table */
+.pf-v5-c-table.pf-m-compact .pf-v5-c-table__td,
+.pf-v5-c-table.pf-m-compact .pf-v5-c-table__th {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.9rem;
 }

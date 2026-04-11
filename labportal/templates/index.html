@@ -1,37 +1,107 @@
 {% extends "base.html" %}
 {% block title %}OCP Lab Portal - Home{% endblock %}
 {% block content %}
-<div class="pf-v5-l-bullseye" style="padding: 2rem 0;">
-    <div class="pf-v5-c-content" style="text-align: center;">
-        <h1>OpenShift Lab Environment</h1>
-        <p style="font-family: monospace; color: var(--pf-v5-global--Color--200);">{{ hostname }}</p>
-    </div>
+<div style="text-align: center; padding: 0.75rem 0; margin-bottom: 0.5rem;">
+    <h1 style="color: #fff; font-size: 1.3rem; margin: 0;">OpenShift Lab Environment</h1>
+    <p style="font-family: monospace; color: #6a6e73; font-size: 0.85rem; margin: 0.25rem 0 0;">{{ hostname }}</p>
 </div>
 
-<div class="pf-v5-l-gallery pf-m-gutter" style="--pf-v5-l-gallery--GridTemplateColumns--min: 300px;">
-    <div class="pf-v5-c-card">
-        <div class="pf-v5-c-card__title">
-            <h2 class="pf-v5-c-card__title-text">About This Lab</h2>
+<!-- System Resources -->
+{% if resources %}
+<div class="pf-v5-c-card" style="margin-bottom: 1.5rem;">
+    <div class="pf-v5-c-card__title">
+        <h2 class="pf-v5-c-card__title-text">System Resources</h2>
+    </div>
+    <div class="pf-v5-c-card__body">
+        <div style="display: flex; gap: 2rem; flex-wrap: wrap;">
+            {% if resources.cpus %}
+            <div class="resource-block">
+                <span class="resource-label">CPUs</span>
+                <span class="resource-value">{{ resources.cpus }}</span>
+            </div>
+            {% endif %}
+            {% if resources.ram_total %}
+            <div class="resource-block">
+                <span class="resource-label">RAM</span>
+                <span class="resource-value">{{ resources.ram_used }}G / {{ resources.ram_total }}G</span>
+            </div>
+            {% endif %}
+            {% if resources.disk_total %}
+            <div class="resource-block">
+                <span class="resource-label">Storage (/kvm)</span>
+                <span class="resource-value">{{ resources.disk_used }} / {{ resources.disk_total }} ({{ resources.disk_pct }} used)</span>
+            </div>
+            {% endif %}
         </div>
-        <div class="pf-v5-c-card__body">
-            <p>Shared KVM-based lab for deploying and testing OpenShift clusters.</p>
-            <div class="pf-v5-c-description-list pf-m-compact" style="margin-top: 1rem;">
-                <div class="pf-v5-c-description-list__group">
-                    <dt class="pf-v5-c-description-list__term"><span>CPUs</span></dt>
-                    <dd class="pf-v5-c-description-list__description"><span>80</span></dd>
-                </div>
-                <div class="pf-v5-c-description-list__group">
-                    <dt class="pf-v5-c-description-list__term"><span>RAM</span></dt>
-                    <dd class="pf-v5-c-description-list__description"><span>376 GB</span></dd>
-                </div>
-                <div class="pf-v5-c-description-list__group">
-                    <dt class="pf-v5-c-description-list__term"><span>Storage</span></dt>
-                    <dd class="pf-v5-c-description-list__description"><span>1.4 TB</span></dd>
+    </div>
+</div>
+{% endif %}
+
+<!-- Active Clusters & VMs -->
+<div class="pf-v5-c-card" style="margin-bottom: 1.5rem;">
+    <div class="pf-v5-c-card__title">
+        <h2 class="pf-v5-c-card__title-text">Clusters &amp; VMs</h2>
+    </div>
+    <div class="pf-v5-c-card__body">
+        {% if clusters %}
+            {% for cluster_name, cluster_vms in clusters.items() %}
+            <div style="margin-bottom: 1.5rem;">
+                <h3 style="color: #fff; margin-bottom: 0.5rem; font-size: 1rem;">
+                    <span style="color: #ee0000;">&#9679;</span> Cluster: <strong>{{ cluster_name }}</strong>
+                    <span class="pf-v5-c-label pf-m-compact {{ 'pf-m-green' if cluster_vms | selectattr('state', 'equalto', 'running') | list | length == cluster_vms | length else 'pf-m-orange' }}" style="margin-left: 0.5rem;">
+                        <span class="pf-v5-c-label__content">{{ cluster_vms | selectattr('state', 'equalto', 'running') | list | length }}/{{ cluster_vms | length }} running</span>
+                    </span>
+                </h3>
+                <table class="pf-v5-c-table pf-m-compact pf-m-grid-md" role="grid" style="margin-top: 0.5rem;">
+                    <thead class="pf-v5-c-table__thead">
+                        <tr class="pf-v5-c-table__tr" role="row">
+                            <th class="pf-v5-c-table__th" role="columnheader" style="width: 60px;">ID</th>
+                            <th class="pf-v5-c-table__th" role="columnheader">VM Name</th>
+                            <th class="pf-v5-c-table__th" role="columnheader">Role</th>
+                            <th class="pf-v5-c-table__th" role="columnheader">State</th>
+                        </tr>
+                    </thead>
+                    <tbody class="pf-v5-c-table__tbody" role="rowgroup">
+                        {% for vm in cluster_vms %}
+                        <tr class="pf-v5-c-table__tr" role="row">
+                            <td class="pf-v5-c-table__td" data-label="ID">{{ vm.id }}</td>
+                            <td class="pf-v5-c-table__td" data-label="Name" style="font-family: monospace;">{{ vm.name }}</td>
+                            <td class="pf-v5-c-table__td" data-label="Role">
+                                {% if 'boot' in vm.name %}bootstrap
+                                {% elif '-m' in vm.name %}master
+                                {% elif '-w' in vm.name %}worker
+                                {% else %}unknown{% endif %}
+                            </td>
+                            <td class="pf-v5-c-table__td" data-label="State">
+                                {% if vm.state == 'running' %}
+                                <span class="pf-v5-c-label pf-m-green pf-m-compact"><span class="pf-v5-c-label__content">running</span></span>
+                                {% elif vm.state == 'shut off' %}
+                                <span class="pf-v5-c-label pf-m-red pf-m-compact"><span class="pf-v5-c-label__content">shut off</span></span>
+                                {% else %}
+                                <span class="pf-v5-c-label pf-m-orange pf-m-compact"><span class="pf-v5-c-label__content">{{ vm.state }}</span></span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="pf-v5-c-empty-state" style="padding: 2rem;">
+            <div class="pf-v5-c-empty-state__content">
+                <h2 class="pf-v5-c-empty-state__title-text">No VMs running</h2>
+                <div class="pf-v5-c-empty-state__body">
+                    No clusters are currently deployed on this lab.
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
+</div>
 
+<!-- Info Cards -->
+<div class="pf-v5-l-gallery pf-m-gutter" style="--pf-v5-l-gallery--GridTemplateColumns--min: 300px;">
     <div class="pf-v5-c-card">
         <div class="pf-v5-c-card__title">
             <h2 class="pf-v5-c-card__title-text">Get Started</h2>

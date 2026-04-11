@@ -288,6 +288,13 @@ deploy_node() {
     local name=$1; local ram=$2; local cpu=$3; local mac=$4; local role=$5; local ip=$6; local hostname=$7
     local NODE_ISO="$INSTALL_DIR/${name}.iso"
 
+    # Add DHCP reservation in libvirt default network so the VM always
+    # gets the correct IP, regardless of kernel args or NetworkManager state.
+    echo "Adding DHCP reservation: $mac -> $ip ($hostname)"
+    virsh net-update default add ip-dhcp-host \
+        "<host mac='$mac' name='$hostname' ip='$ip'/>" \
+        --live --config 2>/dev/null || true
+
     echo "--- Creating Node-Specific ISO: $(basename "$NODE_ISO") ---"
 
     # Customize using the Master as source and Node-specific name as output
@@ -322,6 +329,20 @@ deploy_node() {
         --noautoconsole \
         --check disk_size=off \
         --os-variant "$OS_VARIANT"
+
+    # Wait for CoreOS to install to disk and shut off, then fix boot order.
+    # --cdrom sets CDROM bootindex=1 which overrides --boot, so the VM shuts
+    # down after coreos-installer writes to /dev/vda. We remove the CDROM,
+    # set boot to HDD only, and restart.
+    echo "Waiting for $name to finish CoreOS install..."
+    while [ "$(virsh domstate "$name" 2>/dev/null)" = "running" ]; do
+        sleep 5
+    done
+    echo "$name shut off — fixing boot order and restarting..."
+    virt-xml "$name" --edit --boot hd
+    virt-xml "$name" --remove-device --disk device=cdrom 2>/dev/null || true
+    virsh start "$name"
+    echo "$name restarted from HDD."
 }
 
 # --- 5. EXECUTION LOOP ---

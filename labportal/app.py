@@ -5,6 +5,7 @@ Lab Portal — lightweight web app for managing OCP lab access requests.
 import hashlib
 import os
 import secrets
+import subprocess
 import sys
 from datetime import datetime
 from functools import wraps
@@ -98,6 +99,81 @@ def login_required(f):
     return decorated
 
 
+def get_lab_status():
+    """Query libvirt for VM list and system resources."""
+    vms = []
+    try:
+        result = subprocess.run(
+            ["virsh", "list", "--all"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.strip().split("\n")[2:]:
+            parts = line.split()
+            if len(parts) >= 3:
+                vm_id = parts[0] if parts[0] != "-" else "-"
+                name = parts[1]
+                state = " ".join(parts[2:])
+                vms.append({"id": vm_id, "name": name, "state": state})
+            elif len(parts) == 2:
+                vms.append({"id": "-", "name": parts[0], "state": parts[1]})
+    except Exception:
+        pass
+
+    # Group VMs into clusters by prefix (e.g. upi-boot, upi-m0 -> cluster "upi")
+    clusters = {}
+    for vm in vms:
+        parts = vm["name"].rsplit("-", 1)
+        cluster = parts[0] if len(parts) > 1 else vm["name"]
+        # Normalize: upi-m0 -> cluster "upi", upi-boot -> cluster "upi"
+        for suffix in ("-boot", "-m0", "-m1", "-m2", "-w0", "-w1"):
+            if vm["name"].endswith(suffix):
+                cluster = vm["name"][: -len(suffix)]
+                break
+        if cluster not in clusters:
+            clusters[cluster] = []
+        clusters[cluster].append(vm)
+
+    # System resources
+    resources = {}
+    try:
+        result = subprocess.run(
+            ["free", "-g"], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.split("\n"):
+            if line.startswith("Mem:"):
+                parts = line.split()
+                resources["ram_total"] = parts[1]
+                resources["ram_used"] = parts[2]
+                resources["ram_free"] = parts[3]
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["nproc"], capture_output=True, text=True, timeout=5
+        )
+        resources["cpus"] = result.stdout.strip()
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["df", "-h", "/kvm"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().split("\n")
+        if len(lines) > 1:
+            parts = lines[1].split()
+            resources["disk_total"] = parts[1]
+            resources["disk_used"] = parts[2]
+            resources["disk_avail"] = parts[3]
+            resources["disk_pct"] = parts[4]
+    except Exception:
+        pass
+
+    return vms, clusters, resources
+
+
 # --- Routes ---
 
 @app.route("/")
@@ -110,7 +186,9 @@ def index():
         ).fetchone()[0],
     }
     conn.close()
-    return render_template("index.html", stats=stats, hostname=config.LAB_HOSTNAME)
+    vms, clusters, resources = get_lab_status()
+    return render_template("index.html", stats=stats, hostname=config.LAB_HOSTNAME,
+                           vms=vms, clusters=clusters, resources=resources)
 
 
 @app.route("/request", methods=["GET", "POST"])
