@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}OCP Lab Portal{% endblock %}</title>
+    <link rel="stylesheet" href="https://unpkg.com/@patternfly/patternfly@5/patternfly.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="pf-v5-c-page">
+
+    <header class="pf-v5-c-masthead">
+        <div class="pf-v5-c-masthead__main">
+            <a href="{{ url_for('index') }}" class="pf-v5-c-masthead__brand">
+                <span class="brand-dot"></span>
+                OCP Lab Portal
+            </a>
+        </div>
+        <div class="pf-v5-c-masthead__content">
+            <nav class="pf-v5-c-nav pf-m-horizontal">
+                <ul class="pf-v5-c-nav__list">
+                    <li class="pf-v5-c-nav__item">
+                        <a href="{{ url_for('index') }}" class="pf-v5-c-nav__link">Home</a>
+                    </li>
+                    <li class="pf-v5-c-nav__item">
+                        <a href="{{ url_for('request_access') }}" class="pf-v5-c-nav__link">Request Access</a>
+                    </li>
+                    {% if session.get('admin') %}
+                    <li class="pf-v5-c-nav__item">
+                        <a href="{{ url_for('admin_panel') }}" class="pf-v5-c-nav__link">Admin</a>
+                    </li>
+                    <li class="pf-v5-c-nav__item">
+                        <a href="{{ url_for('logout') }}" class="pf-v5-c-nav__link">Logout</a>
+                    </li>
+                    {% else %}
+                    <li class="pf-v5-c-nav__item">
+                        <a href="{{ url_for('login') }}" class="pf-v5-c-nav__link">Admin Login</a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main class="pf-v5-c-page__main">
+        <section class="pf-v5-c-page__main-section">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                <div class="pf-v5-c-alert pf-m-{{ 'success' if category == 'success' else ('danger' if category == 'danger' else ('warning' if category == 'warning' else 'info')) }} pf-m-inline" style="margin-bottom: 1rem;">
+                    <div class="pf-v5-c-alert__icon"><i class="fas fa-fw"></i></div>
+                    <p class="pf-v5-c-alert__title">{{ message }}</p>
+                </div>
+                {% endfor %}
+            {% endif %}
+            {% endwith %}
+
+            {% block content %}{% endblock %}
+        </section>
+    </main>
+
+    <footer class="portal-footer">
+        <p>OCP Lab &mdash; {{ hostname | default('sdn-04.ocpnet.eng.rdu2.redhat.com') }}</p>
+    </footer>
+</body>
+</html>

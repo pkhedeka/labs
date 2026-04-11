@@ -1,0 +1,28 @@
+import os
+import secrets
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+SECRET_KEY = os.environ.get("LABPORTAL_SECRET_KEY", secrets.token_hex(32))
+
+# Admin credentials — override via environment
+ADMIN_USER = os.environ.get("LABPORTAL_ADMIN_USER", "pkhedeka")
+ADMIN_PASSWORD_HASH = None  # Set on first run via CLI
+
+# Database
+DB_PATH = os.environ.get("LABPORTAL_DB", os.path.join(BASE_DIR, "labportal.db"))
+
+# Email
+SMTP_HOST = os.environ.get("LABPORTAL_SMTP_HOST", "smtp.corp.redhat.com")
+SMTP_PORT = int(os.environ.get("LABPORTAL_SMTP_PORT", "25"))
+ADMIN_EMAIL = os.environ.get("LABPORTAL_ADMIN_EMAIL", "pkhedeka@redhat.com")
+FROM_EMAIL = os.environ.get("LABPORTAL_FROM_EMAIL", "labportal@sdn-04.ocpnet.eng.rdu2.redhat.com")
+
+# Allowed email domains for access requests
+ALLOWED_DOMAINS = {"redhat.com"}
+
+# Blocked patterns (subdomains that aren't real @redhat.com)
+BLOCKED_PATTERNS = []
+
+# Lab system info
+LAB_HOSTNAME = os.environ.get("LABPORTAL_HOSTNAME", "sdn-04.ocpnet.eng.rdu2.redhat.com")

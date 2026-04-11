@@ -1,0 +1,49 @@
+/* Lab Portal — PatternFly overrides and custom styles */
+
+.pf-v5-c-masthead {
+    --pf-v5-c-masthead--BackgroundColor: #151515;
+}
+
+.pf-v5-c-masthead__brand {
+    color: #fff;
+    text-decoration: none;
+    font-size: 1.1rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.brand-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    background: #ee0000;
+    border-radius: 50%;
+}
+
+.pf-v5-c-masthead__content .pf-v5-c-nav__link {
+    color: #d2d2d2;
+}
+.pf-v5-c-masthead__content .pf-v5-c-nav__link:hover {
+    color: #fff;
+}
+
+.pf-v5-c-page__main-section {
+    padding: 1.5rem 2rem;
+}
+
+.portal-footer {
+    text-align: center;
+    padding: 1rem;
+    color: var(--pf-v5-global--Color--200);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--pf-v5-global--BorderColor--100);
+    margin-top: auto;
+}
+
+/* Card title accent */
+.pf-v5-c-card__title-text {
+    border-bottom: 2px solid #ee0000;
+    padding-bottom: 0.5rem;
+}
