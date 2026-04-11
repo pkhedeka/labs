@@ -440,14 +440,8 @@ def user_logout():
 @user_login_required
 def user_dashboard():
     vms, clusters, resources = get_lab_status()
-    conn = get_db()
-    deployments = conn.execute(
-        "SELECT * FROM deployments ORDER BY started_at DESC LIMIT 10"
-    ).fetchall()
-    conn.close()
     return render_template("user_dashboard.html",
-                           vms=vms, clusters=clusters, resources=resources,
-                           deployments=deployments)
+                           vms=vms, clusters=clusters, resources=resources)
 
 
 # --- Cluster Management ---
@@ -473,14 +467,15 @@ def cluster_create():
         flash(f"Cluster '{cluster_name}' already exists.", "warning")
         return redirect(url_for("user_dashboard"))
 
-    # Start deployment in background
+    # Start deployment in background, detached from portal process
     log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"
     try:
         proc = subprocess.Popen(
             [config.DEPLOY_SCRIPT, ocp_version, cluster_name],
             stdout=open(log_file, "w"),
             stderr=subprocess.STDOUT,
-            cwd="/root"
+            cwd="/root",
+            start_new_session=True
         )
         conn = get_db()
         conn.execute(
@@ -539,12 +534,18 @@ def cluster_delete():
         except Exception as e:
             errors.append(f"{vm['name']}: {e}")
 
-    # Mark deployment as deleted
+    # Delete deployment records and log files
     conn = get_db()
-    conn.execute(
-        "UPDATE deployments SET status='deleted', finished_at=? WHERE cluster_name=? AND status IN ('deploying','completed')",
-        (datetime.utcnow().isoformat(), cluster_name)
-    )
+    rows = conn.execute(
+        "SELECT log_file FROM deployments WHERE cluster_name=?", (cluster_name,)
+    ).fetchall()
+    for row in rows:
+        if row["log_file"]:
+            try:
+                os.remove(row["log_file"])
+            except OSError:
+                pass
+    conn.execute("DELETE FROM deployments WHERE cluster_name=?", (cluster_name,))
     conn.commit()
     conn.close()
 

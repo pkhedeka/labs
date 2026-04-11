@@ -133,48 +133,6 @@
     </div>
 </div>
 
-<!-- Deployment History -->
-{% if deployments %}
-<div class="dash-card">
-    <div class="dash-card-header">
-        <h2>Deployment History</h2>
-    </div>
-    <div class="dash-card-body" style="padding: 0;">
-        <table class="pf-v5-c-table pf-m-compact" style="width: 100%;">
-            <thead class="pf-v5-c-table__thead">
-                <tr>
-                    <th class="pf-v5-c-table__th">Cluster</th>
-                    <th class="pf-v5-c-table__th">Version</th>
-                    <th class="pf-v5-c-table__th">Status</th>
-                    <th class="pf-v5-c-table__th">Started</th>
-                    <th class="pf-v5-c-table__th">By</th>
-                    <th class="pf-v5-c-table__th">Logs</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for dep in deployments %}
-                <tr class="pf-v5-c-table__tr">
-                    <td class="pf-v5-c-table__td" style="font-family: 'Red Hat Mono', monospace;">{{ dep.cluster_name }}</td>
-                    <td class="pf-v5-c-table__td">{{ dep.ocp_version }}</td>
-                    <td class="pf-v5-c-table__td">
-                        <span class="cluster-badge {{ 'badge-ok' if dep.status == 'completed' else ('badge-warn' if dep.status == 'deploying' else '') }}" style="font-size: 0.7rem;">
-                            {{ dep.status }}
-                        </span>
-                    </td>
-                    <td class="pf-v5-c-table__td" style="font-size: 0.8rem;">{{ dep.started_at }}</td>
-                    <td class="pf-v5-c-table__td" style="font-size: 0.8rem;">{{ dep.started_by or '-' }}</td>
-                    <td class="pf-v5-c-table__td">
-                        {% if dep.log_file %}
-                        <a href="{{ url_for('cluster_logs', deploy_id=dep.id) }}" class="pf-v5-c-button pf-m-link pf-m-small" style="font-size: 0.75rem;">View Logs</a>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% endif %}
 
 <script>
 (function() {
