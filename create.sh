@@ -244,7 +244,12 @@ fi
 cd "$INSTALL_DIR"
 
 echo "Creating install-config.yaml..."
-cat <<EOF > install-config.yaml
+
+# Pre-read secrets so we don't need command substitution inside the heredoc
+PULL_SECRET=$(cat "$PULL_SECRET_FILE")
+SSH_KEY=$(cat "$SSH_KEY_FILE")
+
+cat > install-config.yaml <<_INSTALL_CONFIG_
 apiVersion: v1
 baseDomain: example.com
 compute:
@@ -267,9 +272,9 @@ networking:
 platform:
   none: {}
 fips: false
-pullSecret: '$(cat "$PULL_SECRET_FILE")'
-sshKey: '$(cat "$SSH_KEY_FILE")'
-EOF
+pullSecret: '${PULL_SECRET}'
+sshKey: '${SSH_KEY}'
+_INSTALL_CONFIG_
 
 echo "Generating Ignition configs..."
 cp -f install-config.yaml install-config.yaml_backup
@@ -369,7 +374,7 @@ CSR_PID=""
 KUBE_PASS=$(cat "$INSTALL_DIR/auth/kubeadmin-password" 2>/dev/null || echo "UNKNOWN")
 CONSOLE=$(oc get route -n openshift-console console -o jsonpath='{.spec.host}' 2>/dev/null || echo "console-openshift-console.apps.${CLUSTER_NAME}.example.com")
 
-cat <<EOF | sudo tee /etc/motd
+cat <<_MOTD_ | sudo tee /etc/motd
 #########################################################################
 #  OPENSHIFT $VERSION DEPLOYMENT COMPLETE  (cluster: $CLUSTER_NAME)
 #########################################################################
@@ -379,6 +384,6 @@ cat <<EOF | sudo tee /etc/motd
 #
 #  KUBECONFIG:   export KUBECONFIG=$INSTALL_DIR/auth/kubeconfig
 #########################################################################
-EOF
+_MOTD_
 
 echo "Installation complete. Cluster access details written to /etc/motd."
