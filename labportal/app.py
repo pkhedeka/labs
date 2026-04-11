@@ -133,16 +133,28 @@ def get_lab_status():
     except Exception:
         pass
 
-    # Group VMs into clusters by prefix (e.g. upi-boot, upi-m0 -> cluster "upi")
+    # Group VMs into clusters by name convention: vm-<cluster>-<role>
+    # e.g. vm-lab01-bootstrap, vm-lab01-master-0 -> cluster "lab01"
     clusters = {}
     for vm in vms:
-        parts = vm["name"].rsplit("-", 1)
-        cluster = parts[0] if len(parts) > 1 else vm["name"]
-        # Normalize: upi-m0 -> cluster "upi", upi-boot -> cluster "upi"
-        for suffix in ("-boot", "-m0", "-m1", "-m2", "-w0", "-w1"):
-            if vm["name"].endswith(suffix):
-                cluster = vm["name"][: -len(suffix)]
-                break
+        name = vm["name"]
+        cluster = name  # fallback
+        if name.startswith("vm-"):
+            # Strip "vm-" prefix, then extract cluster name before role suffix
+            stripped = name[3:]
+            for suffix in ("-bootstrap", "-master-0", "-master-1", "-master-2", "-worker-0", "-worker-1"):
+                if stripped.endswith(suffix):
+                    cluster = stripped[: -len(suffix)]
+                    break
+            else:
+                # No known suffix matched — use everything after vm- as cluster
+                cluster = stripped
+        else:
+            # Legacy naming: upi-boot, upi-m0
+            for suffix in ("-boot", "-m0", "-m1", "-m2", "-w0", "-w1"):
+                if name.endswith(suffix):
+                    cluster = name[: -len(suffix)]
+                    break
         if cluster not in clusters:
             clusters[cluster] = []
         clusters[cluster].append(vm)
@@ -316,8 +328,26 @@ def admin_panel():
             "SELECT * FROM access_requests WHERE status=? ORDER BY created_at DESC",
             (status_filter,)
         ).fetchall()
+    users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
     conn.close()
-    return render_template("admin.html", requests=rows, status_filter=status_filter)
+    return render_template("admin.html", requests=rows, status_filter=status_filter, users=users)
+
+
+@app.route("/admin/user/<int:user_id>/toggle", methods=["POST"])
+@login_required
+def admin_toggle_user(user_id):
+    conn = get_db()
+    user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        abort(404)
+    new_status = 0 if user["is_active"] else 1
+    conn.execute("UPDATE users SET is_active=? WHERE id=?", (new_status, user_id))
+    conn.commit()
+    conn.close()
+    action = "activated" if new_status else "deactivated"
+    flash(f"User {user['name']} ({user['email']}) {action}.", "success")
+    return redirect(url_for("admin_panel", status="all"))
 
 
 @app.route("/admin/action/<int:req_id>", methods=["POST"])
@@ -447,7 +477,7 @@ def cluster_create():
     log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"
     try:
         proc = subprocess.Popen(
-            ["/root/ocp-upi-deploy.sh", ocp_version, cluster_name],
+            [config.DEPLOY_SCRIPT, ocp_version, cluster_name],
             stdout=open(log_file, "w"),
             stderr=subprocess.STDOUT,
             cwd="/root"

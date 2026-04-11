@@ -70,9 +70,9 @@
                     <div class="vm-tile {{ 'vm-running' if vm.state == 'running' else 'vm-off' }}">
                         <div class="vm-name">{{ vm.name }}</div>
                         <div class="vm-role">
-                            {% if 'boot' in vm.name %}bootstrap
-                            {% elif '-m' in vm.name %}master
-                            {% elif '-w' in vm.name %}worker
+                            {% if 'bootstrap' in vm.name %}bootstrap
+                            {% elif 'master' in vm.name %}master
+                            {% elif 'worker' in vm.name %}worker
                             {% else %}vm{% endif %}
                         </div>
                         <div class="vm-state">
@@ -191,9 +191,9 @@ sudo ./ocp-upi-deploy.sh 4.20.1 mycluster</code></pre>
                         const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';
                         const dotClass = vm.state === 'running' ? 'dot-green' : 'dot-red';
                         let role = 'vm';
-                        if (vm.name.includes('boot')) role = 'bootstrap';
-                        else if (vm.name.includes('-m')) role = 'master';
-                        else if (vm.name.includes('-w')) role = 'worker';
+                        if (vm.name.includes('bootstrap')) role = 'bootstrap';
+                        else if (vm.name.includes('master')) role = 'master';
+                        else if (vm.name.includes('worker')) role = 'worker';
                         html += '<div class="vm-tile ' + stateClass + '">';
                         html += '<div class="vm-name">' + vm.name + '</div>';
                         html += '<div class="vm-role">' + role + '</div>';

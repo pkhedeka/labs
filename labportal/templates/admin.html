@@ -77,4 +77,57 @@
     </div>
 </div>
 {% endif %}
+
+<!-- Users Management -->
+{% if users %}
+<div style="margin-top: 2rem;">
+    <div class="pf-v5-c-content" style="margin-bottom: 1rem;">
+        <h1>Users</h1>
+    </div>
+    <table class="pf-v5-c-table pf-m-grid-md" role="grid">
+        <thead class="pf-v5-c-table__thead">
+            <tr class="pf-v5-c-table__tr" role="row">
+                <th class="pf-v5-c-table__th">Name</th>
+                <th class="pf-v5-c-table__th">Email</th>
+                <th class="pf-v5-c-table__th">Role</th>
+                <th class="pf-v5-c-table__th">Status</th>
+                <th class="pf-v5-c-table__th">Created</th>
+                <th class="pf-v5-c-table__th">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="pf-v5-c-table__tbody">
+            {% for user in users %}
+            <tr class="pf-v5-c-table__tr">
+                <td class="pf-v5-c-table__td">{{ user.name }}</td>
+                <td class="pf-v5-c-table__td">{{ user.email }}</td>
+                <td class="pf-v5-c-table__td">
+                    {% if user.is_admin %}
+                    <span class="cluster-badge badge-ok" style="font-size: 0.7rem;">admin</span>
+                    {% else %}
+                    <span class="stat-pill" style="font-size: 0.7rem;">user</span>
+                    {% endif %}
+                </td>
+                <td class="pf-v5-c-table__td">
+                    {% if user.is_active %}
+                    <span class="pf-v5-c-label pf-m-green"><span class="pf-v5-c-label__content">Active</span></span>
+                    {% else %}
+                    <span class="pf-v5-c-label pf-m-red"><span class="pf-v5-c-label__content">Disabled</span></span>
+                    {% endif %}
+                </td>
+                <td class="pf-v5-c-table__td" style="font-size: 0.85rem;">{{ user.created_at }}</td>
+                <td class="pf-v5-c-table__td">
+                    <form method="post" action="{{ url_for('admin_toggle_user', user_id=user.id) }}">
+                        {% if user.is_active %}
+                        <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small">Disable</button>
+                        {% else %}
+                        <button type="submit" class="pf-v5-c-button pf-m-primary pf-m-small">Enable</button>
+                        {% endif %}
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 {% endblock %}

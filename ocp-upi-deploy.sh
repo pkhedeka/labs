@@ -38,8 +38,8 @@ IP_OFFSET="${3:-${IP_OFFSET:-110}}"
 # Derive per-cluster MAC suffix from offset
 MAC_BASE=$(printf "%02x" "$IP_OFFSET")
 
-# Per-cluster VM name prefix
-VM_PREFIX="${CLUSTER_NAME}"
+# Per-cluster VM name prefix: vm-<cluster>-<role>
+VM_PREFIX="vm-${CLUSTER_NAME}"
 
 # Pull secret and SSH key — configurable via environment
 PULL_SECRET_FILE="${PULL_SECRET_FILE:-/root/pull-secret.txt}"
@@ -367,12 +367,12 @@ deploy_node() {
 # --- 5. EXECUTION LOOP ---
 # Per-cluster VM names, MACs, and IPs derived from CLUSTER_NAME + IP_OFFSET
 # Usage: Name | RAM | CPU | MAC | Role | IP | Hostname
-deploy_node "${VM_PREFIX}-boot" 32768 8  "52:54:00:${MAC_BASE}:00:10" "bootstrap" "192.168.122.$(( IP_OFFSET ))"     "bootstrap.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-m0"   32768 8  "52:54:00:${MAC_BASE}:00:11" "master"    "192.168.122.$(( IP_OFFSET + 1 ))" "master-0.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-m1"   32768 8  "52:54:00:${MAC_BASE}:00:12" "master"    "192.168.122.$(( IP_OFFSET + 2 ))" "master-1.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-m2"   32768 8  "52:54:00:${MAC_BASE}:00:13" "master"    "192.168.122.$(( IP_OFFSET + 3 ))" "master-2.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-w0"   16384 4  "52:54:00:${MAC_BASE}:00:14" "worker"    "192.168.122.$(( IP_OFFSET + 4 ))" "worker-0.${CLUSTER_NAME}.example.com"
-deploy_node "${VM_PREFIX}-w1"   16384 4  "52:54:00:${MAC_BASE}:00:15" "worker"    "192.168.122.$(( IP_OFFSET + 5 ))" "worker-1.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-bootstrap" 32768 8  "52:54:00:${MAC_BASE}:00:10" "bootstrap" "192.168.122.$(( IP_OFFSET ))"     "bootstrap.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-master-0"  32768 8  "52:54:00:${MAC_BASE}:00:11" "master"    "192.168.122.$(( IP_OFFSET + 1 ))" "master-0.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-master-1"  32768 8  "52:54:00:${MAC_BASE}:00:12" "master"    "192.168.122.$(( IP_OFFSET + 2 ))" "master-1.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-master-2"  32768 8  "52:54:00:${MAC_BASE}:00:13" "master"    "192.168.122.$(( IP_OFFSET + 3 ))" "master-2.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-worker-0"  16384 4  "52:54:00:${MAC_BASE}:00:14" "worker"    "192.168.122.$(( IP_OFFSET + 4 ))" "worker-0.${CLUSTER_NAME}.example.com"
+deploy_node "${VM_PREFIX}-worker-1"  16384 4  "52:54:00:${MAC_BASE}:00:15" "worker"    "192.168.122.$(( IP_OFFSET + 5 ))" "worker-1.${CLUSTER_NAME}.example.com"
 
 # --- 6. MONITORING & CSR APPROVAL ---
 export KUBECONFIG="$INSTALL_DIR/auth/kubeconfig"
@@ -381,7 +381,7 @@ echo "Waiting for Bootstrap (this takes approx 20 mins)..."
 openshift-install wait-for bootstrap-complete --dir=. --log-level=info
 
 echo "Deleting Bootstrap VM to reclaim RAM..."
-virsh destroy "${VM_PREFIX}-boot" 2>/dev/null && virsh undefine "${VM_PREFIX}-boot" --remove-all-storage 2>/dev/null
+virsh destroy "${VM_PREFIX}-bootstrap" 2>/dev/null && virsh undefine "${VM_PREFIX}-bootstrap" --remove-all-storage 2>/dev/null
 
 echo "Starting background CSR approval loop..."
 # Run in a process group (set -m) so we can kill the entire group on cleanup

@@ -26,3 +26,4 @@ BLOCKED_PATTERNS = []
 
 # Lab system info
 LAB_HOSTNAME = os.environ.get("LABPORTAL_HOSTNAME", "lab.example.com")
+DEPLOY_SCRIPT = os.environ.get("LABPORTAL_DEPLOY_SCRIPT", "/root/ocp-upi-deploy.sh")
