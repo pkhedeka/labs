@@ -13,7 +13,7 @@ from functools import wraps
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, session, abort, jsonify
+    flash, session, abort, jsonify, send_file
 )
 
 import config
@@ -325,7 +325,14 @@ def api_status():
     clusters_data = {}
     for name, cvms in clusters.items():
         clusters_data[name] = cvms
-    return jsonify(vms=vms, clusters=clusters_data, resources=resources)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
+    ).fetchall()
+    conn.close()
+    cluster_versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
+    return jsonify(vms=vms, clusters=clusters_data, resources=resources,
+                   cluster_versions=cluster_versions)
 
 
 @app.route("/")
@@ -338,14 +345,19 @@ def index():
             "SELECT COUNT(*) FROM access_requests WHERE status='pending'"
         ).fetchone()[0],
     }
+    rows = conn.execute(
+        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
+    ).fetchall()
     conn.close()
+    cluster_versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
     vms, clusters, resources = get_lab_status()
     ssh_user = ""
     if session.get("user_email"):
         ssh_user = derive_linux_username(session["user_email"])
     return render_template("index.html", stats=stats,
                            vms=vms, clusters=clusters, resources=resources,
-                           ssh_user=ssh_user, base_domain=config.base_domain())
+                           ssh_user=ssh_user, base_domain=config.base_domain(),
+                           cluster_versions=cluster_versions)
 
 
 @app.route("/request", methods=["GET", "POST"])
@@ -530,7 +542,7 @@ def create_linux_user(username, first_name, last_name):
     # Create user with comment (full name), home dir, labusers group
     full_name = f"{first_name} {last_name}"
     result = subprocess.run(
-        ["useradd", "-m", "-c", full_name, "-G", "labusers", "-s", "/bin/bash", username],
+        ["useradd", "-m", "-c", full_name, "-G", "labusers,libvirt", "-s", "/bin/bash", username],
         capture_output=True, text=True, timeout=10
     )
     if result.returncode != 0:
@@ -748,14 +760,41 @@ def user_dashboard():
     available_slots = sorted(name for name in slots if name not in clusters)
     ssh_user = derive_linux_username(session.get("user_email", ""))
     domain = config.base_domain()
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
+    ).fetchall()
+    conn.close()
+    cluster_versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
     return render_template("user_dashboard.html",
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
                            available_slots=available_slots,
-                           ssh_user=ssh_user, base_domain=domain)
+                           ssh_user=ssh_user, base_domain=domain,
+                           cluster_versions=cluster_versions)
 
 
 # --- Cluster Management ---
+
+@app.route("/cluster/kubeconfig/<cluster_name>")
+@user_login_required
+def cluster_kubeconfig(cluster_name):
+    """Serve kubeconfig file for download."""
+    conn = get_db()
+    dep = conn.execute(
+        "SELECT cluster_name, ocp_version FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
+        (cluster_name,)
+    ).fetchone()
+    conn.close()
+    if not dep:
+        abort(404)
+    kubeconfig_path = f"/kvm/clusters/{dep['cluster_name']}-{dep['ocp_version']}/auth/kubeconfig"
+    if not os.path.isfile(kubeconfig_path):
+        flash(f"Kubeconfig not found for cluster '{cluster_name}'. Deployment may still be in progress.", "warning")
+        return redirect(url_for("user_dashboard"))
+    return send_file(kubeconfig_path, as_attachment=True,
+                     download_name=f"kubeconfig-{cluster_name}")
+
 
 @app.route("/cluster/create", methods=["POST"])
 @user_login_required
@@ -779,6 +818,13 @@ def cluster_create():
     if cluster_name in clusters:
         flash(f"Cluster '{cluster_name}' already exists.", "warning")
         return redirect(url_for("user_dashboard"))
+
+    # Check if another cluster's bootstrap is still running
+    for vm in vms:
+        if "bootstrap" in vm["name"] and vm["state"] == "running":
+            flash(f"Another deployment is in progress ({vm['name']} is still running). "
+                  "Please wait for it to finish before deploying a new cluster.", "warning")
+            return redirect(url_for("user_dashboard"))
 
     # Start deployment in background, detached from portal process
     log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"

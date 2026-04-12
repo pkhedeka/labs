@@ -366,6 +366,25 @@ body.pf-v5-c-page {
     line-height: 1.6;
 }
 
+.copy-btn {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.4rem;
+    background: #292c30;
+    border: 1px solid #3c3f42;
+    border-radius: 4px;
+    color: #8a8d90;
+    font-size: 0.85rem;
+    padding: 0.15rem 0.4rem;
+    cursor: pointer;
+    line-height: 1;
+    transition: color 0.2s, border-color 0.2s;
+}
+.copy-btn:hover {
+    color: #f0f0f0;
+    border-color: #6a6e73;
+}
+
 /* Cards (PF overrides for login/forms) */
 .pf-v5-c-card {
     background: #212427;

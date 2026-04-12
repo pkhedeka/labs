@@ -61,6 +61,9 @@
                 <div class="cluster-header">
                     <span class="cluster-dot"></span>
                     <span class="cluster-name">{{ cluster_name }}</span>
+                    {% if cluster_versions.get(cluster_name) %}
+                    <span class="cluster-badge" style="background:#1f6bff22; color:#73bcf7; border-color:#1f6bff55;">OCP {{ cluster_versions[cluster_name] }}</span>
+                    {% endif %}
                     <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
@@ -178,16 +181,44 @@ oc get co</code></pre>
         </div>
         <div style="margin-bottom:1rem;">
             <h3 style="font-size:0.9rem; margin-bottom:0.4rem; color:#8a8d90;">1. SSH into the lab system</h3>
-            <pre class="code-block" style="margin:0;"><code>ssh {{ ssh_user }}@{{ hostname }}</code></pre>
+            <div style="position:relative;">
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-ssh">ssh {{ ssh_user }}@{{ hostname }}</code></pre>
+                <button onclick="copyText('cli-modal-ssh', this)" class="copy-btn" title="Copy">&#x2398;</button>
+            </div>
         </div>
         <div style="margin-bottom:1rem;">
             <h3 style="font-size:0.9rem; margin-bottom:0.4rem; color:#8a8d90;">2. Set KUBECONFIG</h3>
-            <pre class="code-block" style="margin:0;"><code id="cli-modal-kubeconfig"></code></pre>
+            <div style="position:relative;">
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-kubeconfig"></code></pre>
+                <button onclick="copyText('cli-modal-kubeconfig', this)" class="copy-btn" title="Copy">&#x2398;</button>
+            </div>
         </div>
         <div style="margin-bottom:1rem;">
             <h3 style="font-size:0.9rem; margin-bottom:0.4rem; color:#8a8d90;">3. Access the web console</h3>
-            <pre class="code-block" style="margin:0;"><code id="cli-modal-console"></code></pre>
+            <div style="position:relative;">
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-console"></code></pre>
+                <button onclick="copyText('cli-modal-console', this)" class="copy-btn" title="Copy">&#x2398;</button>
+            </div>
         </div>
+
+        <div style="margin-bottom:1rem; border-top:1px solid #3c3f42; padding-top:1rem;">
+            <h3 style="font-size:0.9rem; margin-bottom:0.4rem; color:#8a8d90;">Access from your local system</h3>
+            <p style="font-size:0.82rem; color:#8a8d90; margin-bottom:0.5rem;">Download the kubeconfig to use <code>oc</code> / <code>kubectl</code> from your own machine:</p>
+            <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+                <a id="cli-modal-download" href="#" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem; padding:0.3rem 0.8rem;">Download kubeconfig</a>
+            </div>
+            <p style="font-size:0.82rem; color:#8a8d90; margin-bottom:0.4rem;">Or use <code>curl</code>:</p>
+            <div style="position:relative;">
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-curl"></code></pre>
+                <button onclick="copyText('cli-modal-curl', this)" class="copy-btn" title="Copy">&#x2398;</button>
+            </div>
+            <p style="font-size:0.82rem; color:#8a8d90; margin-top:0.5rem;">Then export it:</p>
+            <div style="position:relative;">
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-local-export">export KUBECONFIG=~/kubeconfig-&lt;cluster&gt;</code></pre>
+                <button onclick="copyText('cli-modal-local-export', this)" class="copy-btn" title="Copy">&#x2398;</button>
+            </div>
+        </div>
+
         <div style="padding:0.75rem; background:#292c30; border:1px solid #3c3f42; border-radius:6px; font-size:0.82rem; color:#8a8d90;">
             <strong style="color:#c7c7c7;">Note:</strong> Your SSH login is <code>{{ ssh_user }}</code>. You will be prompted to change your password on first login.
             Password expires every 180 days. Account locks after 30 days of inactivity.
@@ -201,12 +232,41 @@ var SSH_USER = "{{ ssh_user }}";
 var HOSTNAME = "{{ hostname }}";
 var BASE_DOMAIN = "{{ base_domain }}";
 
+function copyText(elemId, btn) {
+    var text = document.getElementById(elemId).textContent;
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function() { showCopied(btn); });
+    } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showCopied(btn);
+    }
+}
+function showCopied(btn) {
+    var orig = btn.innerHTML;
+    btn.innerHTML = '&#x2713;';
+    btn.style.color = '#4caf50';
+    setTimeout(function() { btn.innerHTML = orig; btn.style.color = ''; }, 1500);
+}
+
 function showCliModal(clusterName) {
     document.getElementById('cli-modal-title').textContent = 'CLI Access — ' + clusterName;
     document.getElementById('cli-modal-kubeconfig').textContent =
         'export KUBECONFIG=/kvm/clusters/' + clusterName + '-*/auth/kubeconfig';
     document.getElementById('cli-modal-console').textContent =
         'https://console-openshift-console.apps.' + clusterName + '.' + BASE_DOMAIN;
+    var downloadUrl = '/labs/cluster/kubeconfig/' + clusterName;
+    document.getElementById('cli-modal-download').href = downloadUrl;
+    document.getElementById('cli-modal-curl').textContent =
+        'curl -o ~/kubeconfig-' + clusterName + ' ' + window.location.origin + downloadUrl;
+    document.getElementById('cli-modal-local-export').textContent =
+        'export KUBECONFIG=~/kubeconfig-' + clusterName;
     document.getElementById('cli-modal-backdrop').style.display = 'flex';
 }
 
@@ -278,6 +338,7 @@ document.addEventListener('keydown', function(e) {
                     return;
                 }
                 let html = '';
+                const versions = data.cluster_versions || {};
                 clusterNames.forEach(name => {
                     const vms = data.clusters[name];
                     const runCount = vms.filter(v => v.state === 'running').length;
@@ -286,6 +347,9 @@ document.addEventListener('keydown', function(e) {
                     html += '<div class="cluster-header">';
                     html += '<span class="cluster-dot"></span>';
                     html += '<span class="cluster-name">' + name + '</span>';
+                    if (versions[name]) {
+                        html += '<span class="cluster-badge" style="background:#1f6bff22;color:#73bcf7;border-color:#1f6bff55;">OCP ' + versions[name] + '</span>';
+                    }
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
                     if (isLoggedIn) {
                         html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';

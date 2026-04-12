@@ -111,10 +111,10 @@ elif [ "$(virsh net-info default 2>/dev/null | awk '/^Active:/{print $2}')" != "
     preflight_ok=false
 fi
 
-# RAM check — need at least 80 GB for the full cluster
+# RAM check — need at least 48 GB for the full cluster (5 nodes × 16 GB = 80 GB ideal, 48 GB minimum)
 TOTAL_RAM_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
 TOTAL_RAM_GB=$(( TOTAL_RAM_KB / 1024 / 1024 ))
-REQUIRED_RAM_GB=80
+REQUIRED_RAM_GB=48
 if [ "$TOTAL_RAM_GB" -lt "$REQUIRED_RAM_GB" ]; then
     echo "WARN: System has ${TOTAL_RAM_GB} GB RAM, cluster needs ~${REQUIRED_RAM_GB} GB."
     echo "      Deployment may fail or be very slow due to swapping."
@@ -377,12 +377,12 @@ deploy_node() {
 # --- 5. EXECUTION LOOP ---
 # Per-cluster VM names, MACs, and IPs derived from CLUSTER_NAME + IP_OFFSET
 # Usage: Name | RAM | CPU | MAC | Role | IP | Hostname
-deploy_node "${VM_PREFIX}-bootstrap" 32768 8  "52:54:00:${MAC_BASE}:00:10" "bootstrap" "192.168.122.$(( IP_OFFSET ))"     "bootstrap.${CLUSTER_NAME}.${BASE_DOMAIN}"
-deploy_node "${VM_PREFIX}-master-0"  32768 8  "52:54:00:${MAC_BASE}:00:11" "master"    "192.168.122.$(( IP_OFFSET + 1 ))" "master-0.${CLUSTER_NAME}.${BASE_DOMAIN}"
-deploy_node "${VM_PREFIX}-master-1"  32768 8  "52:54:00:${MAC_BASE}:00:12" "master"    "192.168.122.$(( IP_OFFSET + 2 ))" "master-1.${CLUSTER_NAME}.${BASE_DOMAIN}"
-deploy_node "${VM_PREFIX}-master-2"  32768 8  "52:54:00:${MAC_BASE}:00:13" "master"    "192.168.122.$(( IP_OFFSET + 3 ))" "master-2.${CLUSTER_NAME}.${BASE_DOMAIN}"
-deploy_node "${VM_PREFIX}-worker-0"  16384 4  "52:54:00:${MAC_BASE}:00:14" "worker"    "192.168.122.$(( IP_OFFSET + 4 ))" "worker-0.${CLUSTER_NAME}.${BASE_DOMAIN}"
-deploy_node "${VM_PREFIX}-worker-1"  16384 4  "52:54:00:${MAC_BASE}:00:15" "worker"    "192.168.122.$(( IP_OFFSET + 5 ))" "worker-1.${CLUSTER_NAME}.${BASE_DOMAIN}"
+deploy_node "${VM_PREFIX}-bootstrap" 16384 4  "52:54:00:${MAC_BASE}:00:10" "bootstrap" "192.168.122.$(( IP_OFFSET ))"     "bootstrap.${CLUSTER_NAME}.${BASE_DOMAIN}"
+deploy_node "${VM_PREFIX}-master-0"  16384 4  "52:54:00:${MAC_BASE}:00:11" "master"    "192.168.122.$(( IP_OFFSET + 1 ))" "master-0.${CLUSTER_NAME}.${BASE_DOMAIN}"
+deploy_node "${VM_PREFIX}-master-1"  16384 4  "52:54:00:${MAC_BASE}:00:12" "master"    "192.168.122.$(( IP_OFFSET + 2 ))" "master-1.${CLUSTER_NAME}.${BASE_DOMAIN}"
+deploy_node "${VM_PREFIX}-master-2"  16384 4  "52:54:00:${MAC_BASE}:00:13" "master"    "192.168.122.$(( IP_OFFSET + 3 ))" "master-2.${CLUSTER_NAME}.${BASE_DOMAIN}"
+deploy_node "${VM_PREFIX}-worker-0"  16384 2  "52:54:00:${MAC_BASE}:00:14" "worker"    "192.168.122.$(( IP_OFFSET + 4 ))" "worker-0.${CLUSTER_NAME}.${BASE_DOMAIN}"
+deploy_node "${VM_PREFIX}-worker-1"  16384 2  "52:54:00:${MAC_BASE}:00:15" "worker"    "192.168.122.$(( IP_OFFSET + 5 ))" "worker-1.${CLUSTER_NAME}.${BASE_DOMAIN}"
 
 # --- 6. MONITORING & CSR APPROVAL ---
 export KUBECONFIG="$INSTALL_DIR/auth/kubeconfig"
