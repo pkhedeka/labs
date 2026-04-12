@@ -197,10 +197,10 @@
             <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
                 <a id="cli-modal-download" href="#" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem; padding:0.3rem 0.8rem;">Download kubeconfig</a>
             </div>
-            <p style="font-size:0.82rem; color:#8a8d90; margin-bottom:0.4rem;">Or use <code>curl</code>:</p>
+            <p style="font-size:0.82rem; color:#8a8d90; margin-bottom:0.4rem;">Or copy via <code>scp</code>:</p>
             <div style="position:relative;">
-                <pre class="code-block" style="margin:0;"><code id="cli-modal-curl"></code></pre>
-                <button onclick="copyText('cli-modal-curl', this)" class="copy-btn" title="Copy">&#x2398;</button>
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-scp"></code></pre>
+                <button onclick="copyText('cli-modal-scp', this)" class="copy-btn" title="Copy">&#x2398;</button>
             </div>
             <p style="font-size:0.82rem; color:#8a8d90; margin-top:0.5rem;">Then export it:</p>
             <div style="position:relative;">
@@ -253,8 +253,8 @@ function showCliModal(clusterName, version) {
         'https://console-openshift-console.apps.' + clusterName + '.' + BASE_DOMAIN;
     var downloadUrl = '/labs/cluster/kubeconfig/' + clusterName;
     document.getElementById('cli-modal-download').href = downloadUrl;
-    document.getElementById('cli-modal-curl').textContent =
-        'curl -ko ~/kubeconfig-' + clusterName + ' ' + window.location.origin + downloadUrl;
+    document.getElementById('cli-modal-scp').textContent =
+        'scp ' + SSH_USER + '@' + HOSTNAME + ':/kvm/clusters/' + dirName + '/auth/kubeconfig ~/kubeconfig-' + clusterName;
     document.getElementById('cli-modal-local-export').textContent =
         'export KUBECONFIG=~/kubeconfig-' + clusterName;
     document.getElementById('cli-modal-backdrop').style.display = 'flex';
