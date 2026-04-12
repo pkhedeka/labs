@@ -109,8 +109,11 @@
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
                     <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+                        <a href="{{ url_for('cluster_kubeconfig', cluster_name=cluster_name) }}" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;" title="Download kubeconfig">
+                            &#x21E9; kubeconfig
+                        </a>
                         <button type="button" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;"
-                                onclick="showCliModal('{{ cluster_name }}')">
+                                onclick="showCliModal('{{ cluster_name }}', '{{ cluster_versions.get(cluster_name, '') }}')">
                             CLI Access
                         </button>
                         <a href="{{ url_for('cluster_logs', cluster_name=cluster_name) }}" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
@@ -238,16 +241,17 @@ function showCopied(btn) {
     setTimeout(function() { btn.innerHTML = orig; btn.style.color = ''; }, 1500);
 }
 
-function showCliModal(clusterName) {
+function showCliModal(clusterName, version) {
     document.getElementById('cli-modal-title').textContent = 'CLI Access — ' + clusterName;
+    var dirName = version ? (clusterName + '-' + version) : (clusterName + '-*');
     document.getElementById('cli-modal-kubeconfig').textContent =
-        'export KUBECONFIG=/kvm/clusters/' + clusterName + '-*/auth/kubeconfig';
+        'export KUBECONFIG=/kvm/clusters/' + dirName + '/auth/kubeconfig';
     document.getElementById('cli-modal-console').textContent =
         'https://console-openshift-console.apps.' + clusterName + '.' + BASE_DOMAIN;
     var downloadUrl = '/labs/cluster/kubeconfig/' + clusterName;
     document.getElementById('cli-modal-download').href = downloadUrl;
     document.getElementById('cli-modal-curl').textContent =
-        'curl -o ~/kubeconfig-' + clusterName + ' ' + window.location.origin + downloadUrl;
+        'curl -ko ~/kubeconfig-' + clusterName + ' ' + window.location.origin + downloadUrl;
     document.getElementById('cli-modal-local-export').textContent =
         'export KUBECONFIG=~/kubeconfig-' + clusterName;
     document.getElementById('cli-modal-backdrop').style.display = 'flex';
@@ -308,8 +312,10 @@ document.addEventListener('keydown', function(e) {
                         html += '<span class="cluster-badge" style="background:#1f6bff22;color:#73bcf7;border-color:#1f6bff55;">OCP ' + versions[name] + '</span>';
                     }
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
+                    var ver = versions[name] || '';
                     html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';
-                    html += '<button type="button" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;" onclick="showCliModal(\'' + name + '\')">CLI Access</button>';
+                    html += '<a href="/labs/cluster/kubeconfig/' + name + '" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;" title="Download kubeconfig">&#x21E9; kubeconfig</a>';
+                    html += '<button type="button" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;" onclick="showCliModal(\'' + name + '\', \'' + ver + '\')">CLI Access</button>';
                     html += '<a href="/labs/cluster/logs/' + name + '" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">View Logs</a>';
                     html += '<form method="post" action="/labs/cluster/delete" onsubmit="return confirm(\'Delete cluster ' + name + '?\');">';
                     html += '<input type="hidden" name="cluster_name" value="' + name + '">';

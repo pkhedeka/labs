@@ -120,6 +120,29 @@ def generate_password(length=12):
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def get_cluster_versions(clusters):
+    """Get OCP version per cluster — DB first, then fall back to /kvm/clusters/ dirs."""
+    import glob
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
+    ).fetchall()
+    conn.close()
+    versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
+    # Fill in missing versions by scanning disk (most recently modified first)
+    for name in clusters:
+        if name not in versions:
+            matches = glob.glob(f"/kvm/clusters/{name}-*/auth/kubeconfig")
+            if matches:
+                # Pick the most recently modified directory
+                latest = max(matches, key=os.path.getmtime)
+                dir_name = latest.split("/")[3]       # e.g. "upi1-4.19.22"
+                version = dir_name[len(name) + 1:]   # strip "<name>-"
+                if version:
+                    versions[name] = version
+    return versions
+
+
 def get_lab_status():
     """Query libvirt for VM list and system resources."""
     vms = []
@@ -325,12 +348,7 @@ def api_status():
     clusters_data = {}
     for name, cvms in clusters.items():
         clusters_data[name] = cvms
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
-    ).fetchall()
-    conn.close()
-    cluster_versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
+    cluster_versions = get_cluster_versions(clusters)
     return jsonify(vms=vms, clusters=clusters_data, resources=resources,
                    cluster_versions=cluster_versions)
 
@@ -345,12 +363,9 @@ def index():
             "SELECT COUNT(*) FROM access_requests WHERE status='pending'"
         ).fetchone()[0],
     }
-    rows = conn.execute(
-        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
-    ).fetchall()
     conn.close()
-    cluster_versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
     vms, clusters, resources = get_lab_status()
+    cluster_versions = get_cluster_versions(clusters)
     ssh_user = ""
     if session.get("user_email"):
         ssh_user = derive_linux_username(session["user_email"])
@@ -760,12 +775,7 @@ def user_dashboard():
     available_slots = sorted(name for name in slots if name not in clusters)
     ssh_user = derive_linux_username(session.get("user_email", ""))
     domain = config.base_domain()
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
-    ).fetchall()
-    conn.close()
-    cluster_versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
+    cluster_versions = get_cluster_versions(clusters)
     return render_template("user_dashboard.html",
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
@@ -780,16 +790,22 @@ def user_dashboard():
 @user_login_required
 def cluster_kubeconfig(cluster_name):
     """Serve kubeconfig file for download."""
+    import glob
+    kubeconfig_path = None
+    # Try DB first for the exact path
     conn = get_db()
     dep = conn.execute(
         "SELECT cluster_name, ocp_version FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
         (cluster_name,)
     ).fetchone()
     conn.close()
-    if not dep:
-        abort(404)
-    kubeconfig_path = f"/kvm/clusters/{dep['cluster_name']}-{dep['ocp_version']}/auth/kubeconfig"
-    if not os.path.isfile(kubeconfig_path):
+    if dep:
+        kubeconfig_path = f"/kvm/clusters/{dep['cluster_name']}-{dep['ocp_version']}/auth/kubeconfig"
+    if not kubeconfig_path or not os.path.isfile(kubeconfig_path):
+        # Fall back to scanning /kvm/clusters/<cluster_name>-*/auth/kubeconfig
+        matches = glob.glob(f"/kvm/clusters/{cluster_name}-*/auth/kubeconfig")
+        kubeconfig_path = max(matches, key=os.path.getmtime) if matches else None
+    if not kubeconfig_path or not os.path.isfile(kubeconfig_path):
         flash(f"Kubeconfig not found for cluster '{cluster_name}'. Deployment may still be in progress.", "warning")
         return redirect(url_for("user_dashboard"))
     return send_file(kubeconfig_path, as_attachment=True,
@@ -910,6 +926,20 @@ def cluster_delete():
     conn.execute("DELETE FROM deployments WHERE cluster_name=?", (cluster_name,))
     conn.commit()
     conn.close()
+
+    # Clean up cluster directories under /kvm/clusters/<name>-*
+    # (master ISOs in /kvm/client_tools/ are preserved)
+    import glob, shutil
+    for cluster_dir in glob.glob(f"/kvm/clusters/{cluster_name}-*"):
+        if os.path.isdir(cluster_dir):
+            try:
+                shutil.rmtree(cluster_dir)
+            except Exception as e:
+                errors.append(f"cleanup {cluster_dir}: {e}")
+
+    # Refresh MOTD to reflect the change
+    subprocess.Popen(["/root/labs/update-motd.sh"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     if errors:
         flash(f"Cluster '{cluster_name}' partially deleted. Errors: {'; '.join(errors)}", "warning")

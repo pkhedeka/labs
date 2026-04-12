@@ -83,7 +83,11 @@ def init_db():
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT ''")
         conn.execute("ALTER TABLE users ADD COLUMN last_name TEXT NOT NULL DEFAULT ''")
-        conn.execute("ALTER TABLE users ADD COLUMN linux_username TEXT UNIQUE")
+
+    try:
+        conn.execute("SELECT linux_username FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE users ADD COLUMN linux_username TEXT")
         rows = conn.execute("SELECT id, name FROM users").fetchall()
         for row in rows:
             parts = row["name"].split(None, 1)
