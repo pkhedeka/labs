@@ -96,5 +96,11 @@ def init_db():
             conn.execute("UPDATE users SET first_name=?, last_name=? WHERE id=?",
                          (first, last, row["id"]))
         conn.commit()
+
+    try:
+        conn.execute("SELECT ip_offset FROM deployments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE deployments ADD COLUMN ip_offset INTEGER")
+
     conn.commit()
     conn.close()
