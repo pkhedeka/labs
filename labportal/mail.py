@@ -20,7 +20,8 @@ http://{hostname}/labs/admin
     _send(config.admin_email(), subject, body)
 
 
-def send_user_approved(user_email, user_name, admin_note="", password=None):
+def send_user_approved(user_email, user_name, admin_note="", password=None,
+                       linux_username=None, linux_password=None):
     """Notify user their request was approved."""
     hostname = config.lab_hostname()
     subject = f"[Lab Portal] Your access to {hostname} has been approved"
@@ -28,17 +29,28 @@ def send_user_approved(user_email, user_name, admin_note="", password=None):
     creds = ""
     if password:
         creds = f"""
-Your login credentials:
+Portal login credentials:
   Email:    {user_email}
   Password: {password}
 
 Login at: http://{hostname}/labs/user/login
-Please change your password after first login.
+"""
+    ssh_creds = ""
+    if linux_username:
+        ssh_creds = f"""
+SSH access to the lab system:
+  ssh {linux_username}@{hostname}
+"""
+        if linux_password:
+            ssh_creds += f"""  Temporary password: {linux_password}
+  You will be asked to change your password on first login.
+  Password expires every 180 days.
+  Account locks after 30 days of inactivity.
 """
     body = f"""Hi {user_name},
 
 Your request for lab access to {hostname} has been approved.
-{note_line}{creds}
+{note_line}{creds}{ssh_creds}
 Lab portal: http://{hostname}/labs
 
 Thanks,

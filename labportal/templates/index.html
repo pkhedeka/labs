@@ -49,10 +49,10 @@
     </div>
 </div>
 
-<!-- Active Clusters & VMs -->
+<!-- Active Clusters -->
 <div class="dash-card" id="clusters-card">
     <div class="dash-card-header">
-        <h2>Clusters &amp; VMs</h2>
+        <h2>Active Clusters</h2>
     </div>
     <div id="clusters-container">
         {% if clusters %}
@@ -64,11 +64,12 @@
                     <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
-                    {% if session.get('admin') %}
+                    {% if session.get('user_email') or session.get('admin') %}
                     <div style="margin-left: auto; display: flex; gap: 0.5rem;">
                         <a href="{{ url_for('cluster_logs', cluster_name=cluster_name) }}" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
                             View Logs
                         </a>
+                        {% if session.get('admin') %}
                         <form method="post" action="{{ url_for('cluster_delete') }}"
                               onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
                             <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
@@ -76,9 +77,11 @@
                                 Delete Cluster
                             </button>
                         </form>
+                        {% endif %}
                     </div>
                     {% endif %}
                 </div>
+                {% if session.get('user_email') or session.get('admin') %}
                 <div class="vm-grid">
                     {% for vm in cluster_vms %}
                     <div class="vm-tile {{ 'vm-running' if vm.state == 'running' else 'vm-off' }}">
@@ -96,6 +99,7 @@
                     </div>
                     {% endfor %}
                 </div>
+                {% endif %}
             </div>
             {% endfor %}
         {% else %}
@@ -106,36 +110,64 @@
     </div>
 </div>
 
-<!-- Info Cards -->
+<!-- Bottom cards — different content for logged-in vs visitors -->
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-top: 1rem;">
+    {% if session.get('user_email') or session.get('admin') %}
+    <!-- Logged-in user view -->
+    <div class="dash-card">
+        <div class="dash-card-header"><h2>Quick Reference</h2></div>
+        <div class="dash-card-body">
+            <p>SSH into the lab system and use <code>oc</code> to interact with your cluster:</p>
+            <pre class="code-block"><code>ssh {{ session.get('user_email', 'you').split('@')[0] }}@{{ hostname }}
+
+# Set your KUBECONFIG:
+export KUBECONFIG=/kvm/clusters/&lt;name&gt;/auth/kubeconfig
+
+# Check cluster status:
+oc get nodes
+oc get co</code></pre>
+        </div>
+    </div>
+    <div class="dash-card">
+        <div class="dash-card-header"><h2>Your Account</h2></div>
+        <div class="dash-card-body">
+            <p><strong>{{ session.get('user_name', '') }}</strong></p>
+            <p style="color: var(--pf-v5-global--Color--200);">{{ session.get('user_email', '') }}</p>
+            <p style="color: var(--pf-v5-global--Color--200); font-size: 0.85rem;">SSH login: <code>{{ session.get('user_email', '').split('@')[0] }}</code></p>
+            <a href="{{ url_for('user_dashboard') }}" class="pf-v5-c-button pf-m-primary" style="margin-top: 1rem; display: inline-block;">Go to Dashboard</a>
+        </div>
+    </div>
+    {% else %}
+    <!-- Visitor view — not logged in -->
     <div class="dash-card">
         <div class="dash-card-header"><h2>Get Started</h2></div>
         <div class="dash-card-body">
-            <p>Need access? Submit a request and you'll be notified by email once approved.</p>
-            <a href="{{ url_for('request_access') }}" class="pf-v5-c-button pf-m-primary" style="margin-top: 1rem; display: inline-block;">Request Lab Access</a>
-            <div style="margin-top: 0.75rem;">
-                <span class="stat-pill pill-orange">{{ stats.pending }} pending</span>
-                <span class="stat-pill">{{ stats.total }} total</span>
+            <p>Need access to the OpenShift lab? Register for an account and get started in minutes.</p>
+            <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+                <a href="{{ url_for('request_access') }}" class="pf-v5-c-button pf-m-primary">Register Now</a>
+                <a href="{{ url_for('user_login') }}" class="pf-v5-c-button pf-m-secondary">Login</a>
             </div>
         </div>
     </div>
     <div class="dash-card">
-        <div class="dash-card-header"><h2>Quick Reference</h2></div>
+        <div class="dash-card-header"><h2>What You Get</h2></div>
         <div class="dash-card-body">
-            <p>Once approved, SSH in and deploy:</p>
-            <pre class="code-block"><code>ssh your_user@{{ hostname }}
-
-# Deploy a cluster:
-sudo ./ocp-upi-deploy.sh 4.20.1 mycluster</code></pre>
+            <ul style="margin: 0; padding-left: 1.2rem; color: var(--pf-v5-global--Color--200);">
+                <li>Deploy OpenShift clusters on demand</li>
+                <li>SSH access to the lab system</li>
+                <li>Full <code>oc</code> / <code>kubectl</code> CLI access</li>
+                <li>Web console for each cluster</li>
+            </ul>
         </div>
     </div>
+    {% endif %}
 </div>
 
 <script>
 (function() {
     const API = "{{ url_for('api_status') }}";
     const dot = document.getElementById('live-dot');
-    const isAdmin = {{ 'true' if session.get('admin') else 'false' }};
+    const isLoggedIn = {{ 'true' if (session.get('user_email') or session.get('admin')) else 'false' }};
 
     function updateDashboard() {
         fetch(API)
@@ -201,28 +233,30 @@ sudo ./ocp-upi-deploy.sh 4.20.1 mycluster</code></pre>
                     html += '<span class="cluster-dot"></span>';
                     html += '<span class="cluster-name">' + name + '</span>';
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
-                    if (isAdmin) {
+                    if (isLoggedIn) {
                         html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';
                         html += '<a href="/labs/cluster/logs/' + name + '" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">View Logs</a>';
-                        html += '<form method="post" action="/labs/cluster/delete" onsubmit="return confirm(\'Delete cluster ' + name + '? This will destroy all VMs and storage.\');">';
-                        html += '<input type="hidden" name="cluster_name" value="' + name + '">';
-                        html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form></div>';
-                    }
-                    html += '</div><div class="vm-grid">';
-                    vms.forEach(vm => {
-                        const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';
-                        const dotClass = vm.state === 'running' ? 'dot-green' : 'dot-red';
-                        let role = 'vm';
-                        if (vm.name.includes('bootstrap')) role = 'bootstrap';
-                        else if (vm.name.includes('master')) role = 'master';
-                        else if (vm.name.includes('worker')) role = 'worker';
-                        html += '<div class="vm-tile ' + stateClass + '">';
-                        html += '<div class="vm-name">' + vm.name + '</div>';
-                        html += '<div class="vm-role">' + role + '</div>';
-                        html += '<div class="vm-state"><span class="state-dot ' + dotClass + '"></span>' + vm.state + '</div>';
                         html += '</div>';
-                    });
-                    html += '</div></div>';
+                    }
+                    html += '</div>';
+                    if (isLoggedIn) {
+                        html += '<div class="vm-grid">';
+                        vms.forEach(vm => {
+                            const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';
+                            const dotClass = vm.state === 'running' ? 'dot-green' : 'dot-red';
+                            let role = 'vm';
+                            if (vm.name.includes('bootstrap')) role = 'bootstrap';
+                            else if (vm.name.includes('master')) role = 'master';
+                            else if (vm.name.includes('worker')) role = 'worker';
+                            html += '<div class="vm-tile ' + stateClass + '">';
+                            html += '<div class="vm-name">' + vm.name + '</div>';
+                            html += '<div class="vm-role">' + role + '</div>';
+                            html += '<div class="vm-state"><span class="state-dot ' + dotClass + '"></span>' + vm.state + '</div>';
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                    }
+                    html += '</div>';
                 });
                 container.innerHTML = html;
             })

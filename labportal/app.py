@@ -347,15 +347,18 @@ def index():
 @setup_required
 def request_access():
     if request.method == "POST":
-        name = request.form.get("name", "").strip()
+        first_name = request.form.get("first_name", "").strip()
+        last_name = request.form.get("last_name", "").strip()
         email = request.form.get("email", "").strip()
         reason = request.form.get("reason", "").strip()
 
         errors = []
-        if not name or len(name) < 2:
-            errors.append("Name is required (at least 2 characters).")
+        if not first_name or len(first_name) < 2:
+            errors.append("First name is required (at least 2 characters).")
+        if not last_name:
+            errors.append("Last name is required.")
         if not reason or len(reason) < 10:
-            errors.append("Please provide a reason (at least 10 characters).")
+            errors.append("Please provide a comment (at least 10 characters).")
 
         valid, result = validate_email(email)
         if not valid:
@@ -365,7 +368,8 @@ def request_access():
 
         if errors:
             return render_template("request_form.html", errors=errors,
-                                   name=name, email=email, reason=reason)
+                                   first_name=first_name, last_name=last_name,
+                                   email=email, reason=reason)
 
         # Spam protection — one request per email per 24 hours
         conn = get_db()
@@ -389,17 +393,19 @@ def request_access():
             return redirect(url_for("request_access"))
 
         conn.execute(
-            "INSERT INTO access_requests (name, email, reason) VALUES (?, ?, ?)",
-            (name, email, reason)
+            "INSERT INTO access_requests (first_name, last_name, email, reason) VALUES (?, ?, ?, ?)",
+            (first_name, last_name, email, reason)
         )
         conn.commit()
         conn.close()
 
-        send_admin_notification(name, email, reason)
+        full_name = f"{first_name} {last_name}"
+        send_admin_notification(full_name, email, reason)
         flash("Your request has been submitted. You'll receive an email once it's reviewed.", "success")
         return redirect(url_for("index"))
 
-    return render_template("request_form.html", errors=[], name="", email="", reason="")
+    return render_template("request_form.html", errors=[],
+                           first_name="", last_name="", email="", reason="")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -461,8 +467,86 @@ def admin_toggle_user(user_id):
     conn.commit()
     conn.close()
     action = "activated" if new_status else "deactivated"
-    flash(f"User {user['name']} ({user['email']}) {action}.", "success")
+    flash(f"User {user['first_name']} {user['last_name']} ({user['email']}) {action}.", "success")
     return redirect(url_for("admin_panel", status="all"))
+
+
+def derive_linux_username(email):
+    """Derive Linux username from email: part before @, lowercase."""
+    local = email.split("@")[0].lower()
+    # Sanitize: only allow alphanumeric, dots, hyphens, underscores
+    clean = "".join(c for c in local if c.isalnum() or c in ".-_")
+    return clean[:32]  # Linux username max 32 chars
+
+
+def create_linux_user(username, first_name, last_name):
+    """Create a Linux user account with password policies.
+
+    - Force password change on first login (chage -d 0)
+    - Password expires after 180 days (chage -M 180)
+    - Account locks after 30 days of inactivity (chage -I 30)
+    - User added to 'labusers' group (restricted from /kvm)
+    """
+    errors = []
+
+    # Ensure labusers group exists
+    try:
+        subprocess.run(["getent", "group", "labusers"],
+                       capture_output=True, timeout=5)
+    except Exception:
+        pass
+    subprocess.run(["groupadd", "-f", "labusers"],
+                   capture_output=True, timeout=5)
+
+    # Check if user already exists
+    result = subprocess.run(["id", username], capture_output=True, timeout=5)
+    if result.returncode == 0:
+        return True, f"Linux user '{username}' already exists"
+
+    # Create user with comment (full name), home dir, labusers group
+    full_name = f"{first_name} {last_name}"
+    result = subprocess.run(
+        ["useradd", "-m", "-c", full_name, "-G", "labusers", "-s", "/bin/bash", username],
+        capture_output=True, text=True, timeout=10
+    )
+    if result.returncode != 0:
+        return False, f"useradd failed: {result.stderr.strip()}"
+
+    # Generate temporary password
+    temp_password = generate_password(16)
+    proc = subprocess.run(
+        ["chpasswd"],
+        input=f"{username}:{temp_password}",
+        capture_output=True, text=True, timeout=10
+    )
+    if proc.returncode != 0:
+        errors.append(f"chpasswd failed: {proc.stderr.strip()}")
+
+    # Force password change on first login
+    subprocess.run(["chage", "-d", "0", username],
+                   capture_output=True, timeout=5)
+    # Password expires after 180 days
+    subprocess.run(["chage", "-M", "180", username],
+                   capture_output=True, timeout=5)
+    # Account locks after 30 days of inactivity
+    subprocess.run(["chage", "-I", "30", username],
+                   capture_output=True, timeout=5)
+
+    # Restrict access to /kvm — deny labusers group
+    if os.path.isdir("/kvm"):
+        subprocess.run(
+            ["setfacl", "-m", f"u:{username}:r-x", "/kvm"],
+            capture_output=True, timeout=5
+        )
+        # Recursively deny write/delete on /kvm subdirectories
+        subprocess.run(
+            ["setfacl", "-R", "-m", f"u:{username}:r-X", "/kvm"],
+            capture_output=True, timeout=5
+        )
+
+    if errors:
+        return True, f"User created with warnings: {'; '.join(errors)}"
+    return True, temp_password
 
 
 @app.route("/admin/action/<int:req_id>", methods=["POST"])
@@ -488,9 +572,13 @@ def admin_action(req_id):
     conn.commit()
     conn.close()
 
+    full_name = f"{row['first_name']} {row['last_name']}"
+
     if action == "approve":
         password = generate_password()
         pw_hash = hash_password(password)
+        linux_user = derive_linux_username(row["email"])
+
         conn2 = get_db()
         existing_user = conn2.execute(
             "SELECT id FROM users WHERE email=?", (row["email"],)
@@ -502,16 +590,32 @@ def admin_action(req_id):
             )
         else:
             conn2.execute(
-                "INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)",
-                (row["email"], row["name"], pw_hash)
+                "INSERT INTO users (email, first_name, last_name, linux_username, password_hash) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (row["email"], row["first_name"], row["last_name"], linux_user, pw_hash)
             )
         conn2.commit()
         conn2.close()
-        send_user_approved(row["email"], row["name"], note, password=password)
-        flash(f"Approved request from {row['name']}. Account created, credentials emailed.", "success")
+
+        # Create Linux system account
+        success, linux_result = create_linux_user(linux_user, row["first_name"], row["last_name"])
+        if success and linux_result != f"Linux user '{linux_user}' already exists":
+            # linux_result is the temp password
+            temp_pw = linux_result
+            send_user_approved(row["email"], full_name, note,
+                               password=password, linux_username=linux_user,
+                               linux_password=temp_pw)
+            flash(f"Approved {full_name}. Portal + Linux account ({linux_user}) created.", "success")
+        elif success:
+            send_user_approved(row["email"], full_name, note, password=password,
+                               linux_username=linux_user)
+            flash(f"Approved {full_name}. Portal account created. Linux user '{linux_user}' already existed.", "success")
+        else:
+            send_user_approved(row["email"], full_name, note, password=password)
+            flash(f"Approved {full_name}. Portal account created but Linux user creation failed: {linux_result}", "warning")
     else:
-        send_user_denied(row["email"], row["name"], note)
-        flash(f"Denied request from {row['name']}. Notification sent.", "info")
+        send_user_denied(row["email"], full_name, note)
+        flash(f"Denied request from {full_name}. Notification sent.", "info")
 
     return redirect(url_for("admin_panel"))
 
@@ -533,7 +637,7 @@ def user_login():
 
         if user and verify_password(password, user["password_hash"]):
             session["user_email"] = user["email"]
-            session["user_name"] = user["name"]
+            session["user_name"] = f"{user['first_name']} {user['last_name']}"
             if user["is_admin"]:
                 session["admin"] = True
             return redirect(url_for("user_dashboard"))

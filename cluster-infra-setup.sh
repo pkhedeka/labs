@@ -421,6 +421,21 @@ else
     echo "  SELinux disabled — skipping"
 fi
 
+# --- Restrict /kvm access for lab users ---
+echo ""
+echo "=== Configuring /kvm access restrictions ==="
+groupadd -f labusers
+if [ -d "/kvm" ]; then
+    # Group-level ACL: labusers get read+execute only (no write/delete)
+    setfacl -R -m g:labusers:r-X /kvm 2>/dev/null && \
+        echo "  Set read-only ACL for labusers on /kvm" || \
+        echo "  WARN: Could not set ACL on /kvm (install acl package?)"
+    # Default ACL: new files/dirs inherit the restriction
+    setfacl -R -d -m g:labusers:r-X /kvm 2>/dev/null || true
+else
+    echo "  /kvm does not exist — skipping (will apply when /kvm is created)"
+fi
+
 # Open firewall ports for OCP traffic on the libvirt zone
 # VMs reach HAProxy via virbr0 which is in the 'libvirt' zone.
 # Without these rules, VMs get "connection refused" on OCP ports.

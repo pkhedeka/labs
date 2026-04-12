@@ -26,7 +26,7 @@
         <tr class="pf-v5-c-table__tr" role="row">
             <th class="pf-v5-c-table__th" role="columnheader">Name</th>
             <th class="pf-v5-c-table__th" role="columnheader">Email</th>
-            <th class="pf-v5-c-table__th" role="columnheader">Reason</th>
+            <th class="pf-v5-c-table__th" role="columnheader">Comment</th>
             <th class="pf-v5-c-table__th" role="columnheader">Submitted</th>
             <th class="pf-v5-c-table__th" role="columnheader">Status</th>
             <th class="pf-v5-c-table__th" role="columnheader">Actions</th>
@@ -35,7 +35,7 @@
     <tbody class="pf-v5-c-table__tbody" role="rowgroup">
         {% for req in requests %}
         <tr class="pf-v5-c-table__tr" role="row">
-            <td class="pf-v5-c-table__td" data-label="Name">{{ req.name }}</td>
+            <td class="pf-v5-c-table__td" data-label="Name">{{ req.first_name }} {{ req.last_name }}</td>
             <td class="pf-v5-c-table__td" data-label="Email">{{ req.email }}</td>
             <td class="pf-v5-c-table__td" data-label="Reason" style="max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ req.reason }}</td>
             <td class="pf-v5-c-table__td" data-label="Submitted">{{ req.created_at }}</td>
@@ -89,6 +89,7 @@
             <tr class="pf-v5-c-table__tr" role="row">
                 <th class="pf-v5-c-table__th">Name</th>
                 <th class="pf-v5-c-table__th">Email</th>
+                <th class="pf-v5-c-table__th">SSH Login</th>
                 <th class="pf-v5-c-table__th">Role</th>
                 <th class="pf-v5-c-table__th">Status</th>
                 <th class="pf-v5-c-table__th">Created</th>
@@ -98,8 +99,9 @@
         <tbody class="pf-v5-c-table__tbody">
             {% for user in users %}
             <tr class="pf-v5-c-table__tr">
-                <td class="pf-v5-c-table__td">{{ user.name }}</td>
+                <td class="pf-v5-c-table__td">{{ user.first_name }} {{ user.last_name }}</td>
                 <td class="pf-v5-c-table__td">{{ user.email }}</td>
+                <td class="pf-v5-c-table__td"><code>{{ user.linux_username or '—' }}</code></td>
                 <td class="pf-v5-c-table__td">
                     {% if user.is_admin %}
                     <span class="cluster-badge badge-ok" style="font-size: 0.7rem;">admin</span>
