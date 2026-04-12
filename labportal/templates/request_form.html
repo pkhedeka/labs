@@ -8,7 +8,7 @@
         </div>
         <div class="pf-v5-c-card__body">
             <p class="pf-v5-c-content" style="margin-bottom: 1.5rem; color: var(--pf-v5-global--Color--200);">
-                Fill out the form below. You'll receive an email at your @redhat.com address once reviewed.
+                Fill out the form below. You'll receive an email once your request is reviewed.
             </p>
 
             {% if errors %}
@@ -39,17 +39,12 @@
 
                 <div class="pf-v5-c-form__group">
                     <label class="pf-v5-c-form__label" for="email">
-                        <span class="pf-v5-c-form__label-text">Red Hat Email</span>
+                        <span class="pf-v5-c-form__label-text">Email</span>
                         <span class="pf-v5-c-form__label-required" aria-hidden="true">*</span>
                     </label>
                     <div class="pf-v5-c-form__group-control">
                         <input class="pf-v5-c-form-control" type="email" id="email" name="email"
-                               value="{{ email }}" required placeholder="you@redhat.com" pattern=".+@redhat\.com$">
-                        <div class="pf-v5-c-form__helper-text">
-                            <div class="pf-v5-c-helper-text__item">
-                                <span class="pf-v5-c-helper-text__item-text">Only @redhat.com addresses are accepted.</span>
-                            </div>
-                        </div>
+                               value="{{ email }}" required placeholder="you@example.com">
                     </div>
                 </div>
 

@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Setup — OCP Lab Portal{% endblock %}
+{% block content %}
+<div style="max-width: 720px; margin: 0 auto;">
+    <div style="text-align: center; padding: 1.5rem 0 1rem;">
+        <h1 style="color: #ee0000; font-size: 1.6rem; margin: 0 0 0.3rem; font-weight: 800; font-family: 'Red Hat Display', sans-serif;">
+            Welcome to OCP Lab Portal
+        </h1>
+        <p style="color: #888; font-size: 0.95rem; margin: 0;">Let's get your lab environment set up.</p>
+    </div>
+
+    {% if errors %}
+    <div style="margin-bottom: 1rem;">
+        {% for err in errors %}
+        <div class="toast-msg toast-danger" style="position: relative; animation: none;">
+            <span class="toast-text">{{ err }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('setup') }}">
+
+        <!-- Admin Account -->
+        <div class="dash-card">
+            <div class="dash-card-header"><h2>Admin Account</h2></div>
+            <div class="dash-card-body">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="admin_user">
+                            <span class="pf-v5-c-form__label-text">Username</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="text" id="admin_user" name="admin_user"
+                               value="{{ admin_user }}" required>
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="admin_email">
+                            <span class="pf-v5-c-form__label-text">Admin Email</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="email" id="admin_email" name="admin_email"
+                               value="{{ admin_email }}" placeholder="admin@yourorg.com">
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="admin_password">
+                            <span class="pf-v5-c-form__label-text">Password</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="password" id="admin_password" name="admin_password"
+                               required minlength="6" placeholder="Min 6 characters">
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="admin_password2">
+                            <span class="pf-v5-c-form__label-text">Confirm Password</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="password" id="admin_password2" name="admin_password2"
+                               required minlength="6">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Lab Configuration -->
+        <div class="dash-card">
+            <div class="dash-card-header"><h2>Lab Configuration</h2></div>
+            <div class="dash-card-body">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="base_domain">
+                            <span class="pf-v5-c-form__label-text">Base Domain</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="text" id="base_domain" name="base_domain"
+                               value="{{ base_domain }}" required placeholder="e.g. mylab.local">
+                        <span class="pf-v5-c-helper-text__item-text">Clusters will be &lt;name&gt;.{{ base_domain or 'yourdomain' }}</span>
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="lab_hostname">
+                            <span class="pf-v5-c-form__label-text">Lab Hostname</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="text" id="lab_hostname" name="lab_hostname"
+                               value="{{ lab_hostname }}" placeholder="e.g. lab.myorg.com (shown in UI)">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Email Settings -->
+        <div class="dash-card">
+            <div class="dash-card-header"><h2>Email Settings</h2></div>
+            <div class="dash-card-body">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="email_domains">
+                            <span class="pf-v5-c-form__label-text">Allowed Email Domains</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="text" id="email_domains" name="email_domains"
+                               value="{{ email_domains }}" placeholder="e.g. myorg.com,partner.com">
+                        <span class="pf-v5-c-helper-text__item-text">Comma-separated. Leave blank to allow all.</span>
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="from_email">
+                            <span class="pf-v5-c-form__label-text">From Address</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="email" id="from_email" name="from_email"
+                               value="{{ from_email }}" placeholder="labportal@mylab.local">
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="smtp_host">
+                            <span class="pf-v5-c-form__label-text">SMTP Host</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="text" id="smtp_host" name="smtp_host"
+                               value="{{ smtp_host }}" placeholder="smtp.myorg.com">
+                    </div>
+                    <div class="pf-v5-c-form__group">
+                        <label class="pf-v5-c-form__label" for="smtp_port">
+                            <span class="pf-v5-c-form__label-text">SMTP Port</span>
+                        </label>
+                        <input class="pf-v5-c-form-control" type="number" id="smtp_port" name="smtp_port"
+                               value="{{ smtp_port }}" placeholder="25">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cluster Slots -->
+        <div class="dash-card">
+            <div class="dash-card-header">
+                <h2>Cluster Slots</h2>
+                <button type="button" class="pf-v5-c-button pf-m-secondary pf-m-small" onclick="addSlot()"
+                        style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">+ Add Slot</button>
+            </div>
+            <div class="dash-card-body">
+                <p style="margin-bottom: 1rem;">Define the cluster names and their IP offset on 192.168.122.0/24.
+                   Each cluster uses 6 IPs starting at the offset (bootstrap, 3 masters, 2 workers).</p>
+                <div id="slots-container">
+                    {% for name, offset in slots.items() %}
+                    <div class="slot-row" style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 0.75rem;">
+                        <div class="pf-v5-c-form__group" style="flex: 1;">
+                            {% if loop.first %}
+                            <label class="pf-v5-c-form__label"><span class="pf-v5-c-form__label-text">Cluster Name</span></label>
+                            {% endif %}
+                            <input class="pf-v5-c-form-control" type="text" name="slot_name_{{ loop.index }}"
+                                   value="{{ name }}" required placeholder="e.g. dev1" pattern="[a-zA-Z0-9\-]+">
+                        </div>
+                        <div class="pf-v5-c-form__group" style="flex: 1;">
+                            {% if loop.first %}
+                            <label class="pf-v5-c-form__label"><span class="pf-v5-c-form__label-text">IP Offset</span></label>
+                            {% endif %}
+                            <input class="pf-v5-c-form-control" type="number" name="slot_offset_{{ loop.index }}"
+                                   value="{{ offset }}" required min="2" max="240" step="10" placeholder="e.g. 110">
+                        </div>
+                        <div class="pf-v5-c-form__group" style="width: 50px;">
+                            {% if not loop.first %}
+                            <button type="button" class="pf-v5-c-button pf-m-danger pf-m-small"
+                                    onclick="this.closest('.slot-row').remove(); reindexSlots();"
+                                    style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">&times;</button>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Submit -->
+        <div style="text-align: center; padding: 1rem 0 2rem;">
+            <button class="pf-v5-c-button pf-m-primary" type="submit" style="font-size: 1rem; padding: 0.6rem 2rem;">
+                Complete Setup
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+var slotCount = {{ slots|length }};
+
+function addSlot() {
+    slotCount++;
+    var container = document.getElementById('slots-container');
+    var div = document.createElement('div');
+    div.className = 'slot-row';
+    div.style = 'display:flex;gap:1rem;align-items:flex-end;margin-bottom:0.75rem;';
+    div.innerHTML =
+        '<div class="pf-v5-c-form__group" style="flex:1;">' +
+            '<input class="pf-v5-c-form-control" type="text" name="slot_name_' + slotCount + '" required placeholder="e.g. staging" pattern="[a-zA-Z0-9\\-]+">' +
+        '</div>' +
+        '<div class="pf-v5-c-form__group" style="flex:1;">' +
+            '<input class="pf-v5-c-form-control" type="number" name="slot_offset_' + slotCount + '" required min="2" max="240" step="10" placeholder="e.g. ' + (100 + slotCount * 10) + '">' +
+        '</div>' +
+        '<div class="pf-v5-c-form__group" style="width:50px;">' +
+            '<button type="button" class="pf-v5-c-button pf-m-danger pf-m-small" onclick="this.closest(\'.slot-row\').remove();reindexSlots();" style="font-size:0.75rem;padding:0.2rem 0.5rem;">&times;</button>' +
+        '</div>';
+    container.appendChild(div);
+}
+
+function reindexSlots() {
+    var rows = document.querySelectorAll('.slot-row');
+    rows.forEach(function(row, i) {
+        var inputs = row.querySelectorAll('input');
+        if (inputs.length >= 2) {
+            inputs[0].name = 'slot_name_' + (i + 1);
+            inputs[1].name = 'slot_offset_' + (i + 1);
+        }
+    });
+    slotCount = rows.length;
+}
+</script>
+{% endblock %}
