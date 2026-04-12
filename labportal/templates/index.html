@@ -65,13 +65,18 @@
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
                     {% if session.get('admin') %}
-                    <form method="post" action="{{ url_for('cluster_delete') }}" style="margin-left: auto;"
-                          onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
-                        <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
-                        <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
-                            Delete Cluster
-                        </button>
-                    </form>
+                    <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+                        <a href="{{ url_for('cluster_logs', cluster_name=cluster_name) }}" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
+                            View Logs
+                        </a>
+                        <form method="post" action="{{ url_for('cluster_delete') }}"
+                              onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
+                            <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
+                            <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
+                                Delete Cluster
+                            </button>
+                        </form>
+                    </div>
                     {% endif %}
                 </div>
                 <div class="vm-grid">
@@ -197,9 +202,11 @@ sudo ./ocp-upi-deploy.sh 4.20.1 mycluster</code></pre>
                     html += '<span class="cluster-name">' + name + '</span>';
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
                     if (isAdmin) {
-                        html += '<form method="post" action="/labs/cluster/delete" style="margin-left:auto;" onsubmit="return confirm(\'Delete cluster ' + name + '? This will destroy all VMs and storage.\');">';
+                        html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';
+                        html += '<a href="/labs/cluster/logs/' + name + '" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">View Logs</a>';
+                        html += '<form method="post" action="/labs/cluster/delete" onsubmit="return confirm(\'Delete cluster ' + name + '? This will destroy all VMs and storage.\');">';
                         html += '<input type="hidden" name="cluster_name" value="' + name + '">';
-                        html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form>';
+                        html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form></div>';
                     }
                     html += '</div><div class="vm-grid">';
                     vms.forEach(vm => {

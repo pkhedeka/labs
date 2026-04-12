@@ -48,7 +48,8 @@ def init_db():
             started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             finished_at TIMESTAMP,
             pid INTEGER,
-            log_file TEXT
+            log_file TEXT,
+            ip_offset INTEGER
         );
     """)
     conn.commit()

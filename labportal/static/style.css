@@ -500,24 +500,26 @@ body.pf-v5-c-page {
 /* Toast notifications */
 .toast-container {
     position: fixed;
-    top: 1rem;
-    right: 1rem;
+    top: 5rem;
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 9999;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    max-width: 420px;
+    max-width: 560px;
+    width: 90%;
 }
 
 .toast-msg {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.85rem 1rem;
+    padding: 1rem 1.25rem;
     border-radius: 10px;
     backdrop-filter: blur(16px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    animation: toastSlideIn 0.35s ease-out;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 60px rgba(0, 0, 0, 0.3);
+    animation: toastDropIn 0.4s ease-out;
     transition: opacity 0.4s, transform 0.4s;
 }
 
@@ -547,8 +549,8 @@ body.pf-v5-c-page {
 
 .toast-text {
     flex: 1;
-    font-size: 0.85rem;
-    font-weight: 500;
+    font-size: 0.95rem;
+    font-weight: 600;
     line-height: 1.4;
 }
 
@@ -567,9 +569,9 @@ body.pf-v5-c-page {
     opacity: 1;
 }
 
-@keyframes toastSlideIn {
-    from { opacity: 0; transform: translateX(100%); }
-    to { opacity: 1; transform: translateX(0); }
+@keyframes toastDropIn {
+    from { opacity: 0; transform: translateY(-30px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* Footer */

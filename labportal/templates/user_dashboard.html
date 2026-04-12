@@ -69,11 +69,18 @@
             </div>
             <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
                 <label class="pf-v5-c-form__label" for="cluster_name">
-                    <span class="pf-v5-c-form__label-text">Cluster Name</span>
+                    <span class="pf-v5-c-form__label-text">Cluster Slot</span>
                 </label>
                 <div class="pf-v5-c-form__group-control">
-                    <input class="pf-v5-c-form-control" type="text" id="cluster_name" name="cluster_name"
-                           required placeholder="e.g. dev01" pattern="[a-zA-Z0-9\-]+">
+                    <select class="pf-v5-c-form-control" id="cluster_name" name="cluster_name" required>
+                        {% if available_slots %}
+                            {% for slot in available_slots %}
+                            <option value="{{ slot }}">{{ slot }}</option>
+                            {% endfor %}
+                        {% else %}
+                            <option value="" disabled selected>No slots available</option>
+                        {% endif %}
+                    </select>
                 </div>
             </div>
             <div class="pf-v5-c-form__group">
@@ -98,13 +105,18 @@
                     <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
-                    <form method="post" action="{{ url_for('cluster_delete') }}" style="margin-left: auto;"
-                          onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
-                        <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
-                        <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
-                            Delete Cluster
-                        </button>
-                    </form>
+                    <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+                        <a href="{{ url_for('cluster_logs', cluster_name=cluster_name) }}" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
+                            View Logs
+                        </a>
+                        <form method="post" action="{{ url_for('cluster_delete') }}"
+                              onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
+                            <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
+                            <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
+                                Delete Cluster
+                            </button>
+                        </form>
+                    </div>
                 </div>
                 <div class="vm-grid">
                     {% for vm in cluster_vms %}
@@ -178,9 +190,11 @@
                     html += '<span class="cluster-dot"></span>';
                     html += '<span class="cluster-name">' + name + '</span>';
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
-                    html += '<form method="post" action="/labs/cluster/delete" style="margin-left:auto;" onsubmit="return confirm(\'Delete cluster ' + name + '?\');">';
+                    html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';
+                    html += '<a href="/labs/cluster/logs/' + name + '" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">View Logs</a>';
+                    html += '<form method="post" action="/labs/cluster/delete" onsubmit="return confirm(\'Delete cluster ' + name + '?\');">';
                     html += '<input type="hidden" name="cluster_name" value="' + name + '">';
-                    html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form>';
+                    html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form></div>';
                     html += '</div><div class="vm-grid">';
                     vms.forEach(vm => {
                         const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';

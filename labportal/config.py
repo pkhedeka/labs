@@ -27,3 +27,11 @@ BLOCKED_PATTERNS = []
 # Lab system info
 LAB_HOSTNAME = os.environ.get("LABPORTAL_HOSTNAME", "lab.example.com")
 DEPLOY_SCRIPT = os.environ.get("LABPORTAL_DEPLOY_SCRIPT", "/root/ocp-upi-deploy.sh")
+
+# Predefined cluster slots: name -> IP offset
+# Each slot uses IPs .offset through .offset+5 on 192.168.122.0/24
+CLUSTER_SLOTS = {
+    "upi1": 110,
+    "upi2": 120,
+    "upi3": 130,
+}

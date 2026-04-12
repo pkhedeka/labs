@@ -440,8 +440,14 @@ def user_logout():
 @user_login_required
 def user_dashboard():
     vms, clusters, resources = get_lab_status()
+    # Available slots = predefined slots minus currently deployed clusters
+    available_slots = sorted(
+        name for name in config.CLUSTER_SLOTS if name not in clusters
+    )
     return render_template("user_dashboard.html",
-                           vms=vms, clusters=clusters, resources=resources)
+                           vms=vms, clusters=clusters, resources=resources,
+                           cluster_slots=sorted(config.CLUSTER_SLOTS.keys()),
+                           available_slots=available_slots)
 
 
 # --- Cluster Management ---
@@ -456,12 +462,14 @@ def cluster_create():
         flash("Cluster name and OCP version are required.", "danger")
         return redirect(url_for("user_dashboard"))
 
-    # Validate cluster name (alphanumeric + hyphens only)
-    if not all(c.isalnum() or c == "-" for c in cluster_name):
-        flash("Cluster name must contain only letters, numbers, and hyphens.", "danger")
+    # Validate against predefined cluster slots
+    if cluster_name not in config.CLUSTER_SLOTS:
+        flash(f"Invalid cluster slot '{cluster_name}'. Choose from: {', '.join(sorted(config.CLUSTER_SLOTS))}.", "danger")
         return redirect(url_for("user_dashboard"))
 
-    # Check if cluster already exists
+    ip_offset = config.CLUSTER_SLOTS[cluster_name]
+
+    # Check if cluster already exists (VMs running)
     vms, clusters, _ = get_lab_status()
     if cluster_name in clusters:
         flash(f"Cluster '{cluster_name}' already exists.", "warning")
@@ -471,7 +479,7 @@ def cluster_create():
     log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"
     try:
         proc = subprocess.Popen(
-            [config.DEPLOY_SCRIPT, ocp_version, cluster_name],
+            [config.DEPLOY_SCRIPT, ocp_version, cluster_name, str(ip_offset)],
             stdout=open(log_file, "w"),
             stderr=subprocess.STDOUT,
             cwd="/root",
@@ -479,9 +487,9 @@ def cluster_create():
         )
         conn = get_db()
         conn.execute(
-            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file) "
-            "VALUES (?, ?, 'deploying', ?, ?, ?)",
-            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file)
+            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset) "
+            "VALUES (?, ?, 'deploying', ?, ?, ?, ?)",
+            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset)
         )
         conn.commit()
         conn.close()
@@ -557,21 +565,31 @@ def cluster_delete():
     return redirect(url_for("user_dashboard"))
 
 
-@app.route("/cluster/logs/<int:deploy_id>")
-@user_login_required
-def cluster_logs(deploy_id):
+@app.route("/cluster/logs/<cluster_name>")
+def cluster_logs(cluster_name):
+    if not session.get("user_email") and not session.get("admin"):
+        return redirect(url_for("user_login"))
     conn = get_db()
-    dep = conn.execute("SELECT * FROM deployments WHERE id=?", (deploy_id,)).fetchone()
+    dep = conn.execute(
+        "SELECT * FROM deployments WHERE cluster_name=? ORDER BY started_at DESC LIMIT 1",
+        (cluster_name,)
+    ).fetchone()
     conn.close()
+
     if not dep or not dep["log_file"]:
-        abort(404)
+        flash(f"No logs found for cluster '{cluster_name}'.", "warning")
+        if session.get("user_email"):
+            return redirect(url_for("user_dashboard"))
+        return redirect(url_for("index"))
+
     try:
         with open(dep["log_file"], "r") as f:
             lines = f.readlines()
-            tail = lines[-100:] if len(lines) > 100 else lines
+            tail = lines[-200:] if len(lines) > 200 else lines
         log_content = "".join(tail)
     except FileNotFoundError:
         log_content = "Log file not found."
+
     return render_template("cluster_logs.html", deployment=dep, log_content=log_content)
 
 
