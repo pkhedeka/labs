@@ -661,10 +661,13 @@ def user_dashboard():
     vms, clusters, resources = get_lab_status()
     slots = config.cluster_slots()
     available_slots = sorted(name for name in slots if name not in clusters)
+    ssh_user = derive_linux_username(session.get("user_email", ""))
+    domain = config.base_domain()
     return render_template("user_dashboard.html",
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
-                           available_slots=available_slots)
+                           available_slots=available_slots,
+                           ssh_user=ssh_user, base_domain=domain)
 
 
 # --- Cluster Management ---

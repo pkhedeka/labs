@@ -145,6 +145,53 @@
     </div>
 </div>
 
+<!-- SSH & CLI Instructions -->
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2>SSH &amp; CLI Access</h2>
+    </div>
+    <div class="dash-card-body">
+        <p style="margin-bottom: 1rem; color: var(--pf-v5-global--Color--200);">
+            Connect to the lab system via SSH to use <code>oc</code> and <code>kubectl</code> with your clusters.
+        </p>
+
+        <h3 style="font-size: 0.95rem; margin-bottom: 0.5rem;">1. SSH into the lab</h3>
+        <pre class="code-block"><code>ssh {{ ssh_user }}@{{ hostname }}</code></pre>
+
+        {% if clusters %}
+        <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem;">2. Set your KUBECONFIG for a cluster</h3>
+        {% for cluster_name in clusters.keys() %}
+        <pre class="code-block"><code># {{ cluster_name }}
+export KUBECONFIG=/kvm/clusters/{{ cluster_name }}-*/auth/kubeconfig</code></pre>
+        {% endfor %}
+
+        <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem;">3. Common commands</h3>
+        <pre class="code-block"><code># Check cluster nodes
+oc get nodes
+
+# Check cluster operators
+oc get co
+
+# Access the web console
+oc get route -n openshift-console console -o jsonpath='{.spec.host}'
+
+# Check cluster version
+oc get clusterversion
+
+# View all pods
+oc get pods -A</code></pre>
+        {% else %}
+        <p style="color: var(--pf-v5-global--Color--200); margin-top: 0.5rem;">
+            Deploy a cluster above, then your KUBECONFIG and CLI commands will appear here.
+        </p>
+        {% endif %}
+
+        <div style="margin-top: 1rem; padding: 0.75rem; background: var(--pf-v5-global--BackgroundColor--200); border-radius: 6px; font-size: 0.85rem; color: var(--pf-v5-global--Color--200);">
+            <strong>Note:</strong> Your SSH login is <code>{{ ssh_user }}</code>. You will be prompted to change your password on first login.
+            Password expires every 180 days. Account locks after 30 days of inactivity.
+        </div>
+    </div>
+</div>
 
 <script>
 (function() {
