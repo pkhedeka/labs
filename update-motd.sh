@@ -31,7 +31,8 @@ if [ -d "$CLUSTERS_DIR" ]; then
         cluster_name="${dirname%%-*}"
         version="${dirname#*-}"
 
-        vm_count=$(virsh list --name 2>/dev/null | grep -c "vm-${cluster_name}-" || true)
+        # Match both naming conventions: vm-<cluster>-* and <cluster>-*
+        vm_count=$(virsh list --name 2>/dev/null | grep -cE "(vm-)?${cluster_name}-" || true)
         if [ "$vm_count" -gt 0 ]; then
             ACTIVE_CLUSTERS+=("$dirname")
         fi
@@ -57,7 +58,7 @@ fi
             kubeconfig="$dir/auth/kubeconfig"
             password=$(cat "$dir/auth/kubeadmin-password" 2>/dev/null || echo "N/A")
             console="console-openshift-console.apps.${cluster_name}.${BASE_DOMAIN}"
-            vm_count=$(virsh list --name 2>/dev/null | grep -c "vm-${cluster_name}-" || true)
+            vm_count=$(virsh list --name 2>/dev/null | grep -cE "(vm-)?${cluster_name}-" || true)
 
             # Check if API is reachable (quick timeout)
             api_status="Unknown"
