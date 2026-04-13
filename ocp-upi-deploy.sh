@@ -56,16 +56,10 @@ PULL_SECRET_FILE="${PULL_SECRET_FILE:-/root/pull-secret.txt}"
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 
 # --- CLEANUP TRAP ---
-CSR_PID=""
-
 cleanup() {
     echo ""
     echo "Caught signal — cleaning up..."
-    if [ -n "$CSR_PID" ] && kill -0 "$CSR_PID" 2>/dev/null; then
-        echo "Stopping CSR approval loop (PID $CSR_PID)..."
-        kill -- -"$CSR_PID" 2>/dev/null || kill "$CSR_PID" 2>/dev/null || true
-        wait "$CSR_PID" 2>/dev/null || true
-    fi
+    systemctl stop "csr-approver@${CLUSTER_NAME}.service" 2>/dev/null || true
     echo "Cleanup complete."
 }
 
@@ -387,20 +381,9 @@ deploy_node "${VM_PREFIX}-worker-1"  16384 2  "52:54:00:${MAC_BASE}:00:15" "work
 # --- 6. MONITORING & CSR APPROVAL ---
 export KUBECONFIG="$INSTALL_DIR/auth/kubeconfig"
 
-echo "Starting background CSR approval loop (initial 20 min delay, then every 5 min)..."
-(
-    set +e
-    sleep 1200  # Wait 20 minutes before first check
-    while true; do
-        pending=$(oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' 2>/dev/null)
-        if [ -n "$pending" ]; then
-            echo "[CSR] Approving pending CSRs..."
-            echo "$pending" | xargs oc adm certificate approve 2>/dev/null
-        fi
-        sleep 300  # Check every 5 minutes
-    done
-) &
-CSR_PID=$!
+echo "Starting CSR auto-approver service for ${CLUSTER_NAME}..."
+systemctl start "csr-approver@${CLUSTER_NAME}.service" 2>/dev/null || \
+    echo "WARN: Could not start csr-approver service — approve CSRs manually if needed"
 
 echo "Waiting for Bootstrap (this takes approx 20 mins)..."
 openshift-install wait-for bootstrap-complete --dir=. --log-level=info
@@ -411,12 +394,8 @@ virsh destroy "${VM_PREFIX}-bootstrap" 2>/dev/null && virsh undefine "${VM_PREFI
 echo "Waiting for Final Installation..."
 openshift-install wait-for install-complete --dir=. --log-level=info
 
-# Stop background CSR loop (trap will also handle this on exit)
-if [ -n "$CSR_PID" ] && kill -0 "$CSR_PID" 2>/dev/null; then
-    kill "$CSR_PID" 2>/dev/null || true
-    wait "$CSR_PID" 2>/dev/null || true
-fi
-CSR_PID=""
+# Stop CSR approver if still running (it self-terminates, but just in case)
+systemctl stop "csr-approver@${CLUSTER_NAME}.service" 2>/dev/null || true
 
 # --- 7. FINAL BANNER ---
 # Update the dynamic MOTD that shows all active clusters
