@@ -22,18 +22,9 @@
         <div class="pf-v5-c-masthead__content">
             <nav class="pf-v5-c-nav pf-m-horizontal">
                 <ul class="pf-v5-c-nav__list">
-                    <li class="pf-v5-c-nav__item">
-                        <a href="{{ url_for('index') }}" class="pf-v5-c-nav__link">Home</a>
-                    </li>
-                    <li class="pf-v5-c-nav__item">
-                        <a href="{{ url_for('request_access') }}" class="pf-v5-c-nav__link">Request Access</a>
-                    </li>
                     {% if session.get('user_email') %}
                     <li class="pf-v5-c-nav__item">
                         <a href="{{ url_for('user_dashboard') }}" class="pf-v5-c-nav__link">Dashboard</a>
-                    </li>
-                    <li class="pf-v5-c-nav__item">
-                        <a href="{{ url_for('user_terminal') }}" class="pf-v5-c-nav__link">Terminal</a>
                     </li>
                     {% if session.get('admin') %}
                     <li class="pf-v5-c-nav__item">

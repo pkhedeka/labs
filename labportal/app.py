@@ -390,6 +390,8 @@ def api_status():
 @app.route("/")
 @setup_required
 def index():
+    if session.get("user_email"):
+        return redirect(url_for("user_dashboard"))
     conn = get_db()
     stats = {
         "total": conn.execute("SELECT COUNT(*) FROM access_requests").fetchone()[0],
