@@ -345,7 +345,7 @@ deploy_node() {
         --cpu host-passthrough \
         --disk size=120,bus=virtio \
         --network network=default,mac="$mac" \
-        --graphics vnc,listen=0.0.0.0 \
+        --graphics vnc,listen=127.0.0.1 \
         --video virtio \
         --cdrom "$NODE_ISO" \
         --boot hd,cdrom \
