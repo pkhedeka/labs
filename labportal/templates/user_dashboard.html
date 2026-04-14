@@ -66,7 +66,19 @@
         <h2>Deploy New Cluster</h2>
     </div>
     <div class="dash-card-body">
-        <form method="post" action="{{ url_for('cluster_create') }}" class="pf-v5-c-form" style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+        <form method="post" action="{{ url_for('cluster_create') }}" id="deploy-form" class="pf-v5-c-form" style="display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+            <div class="pf-v5-c-form__group" style="min-width: 160px;">
+                <label class="pf-v5-c-form__label" for="install_type">
+                    <span class="pf-v5-c-form__label-text">Install Type</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <select class="pf-v5-c-form-control" id="install_type" name="install_type" required onchange="toggleInstallType()">
+                        {% for key, itype in install_types.items() %}
+                        <option value="{{ key }}" data-vcpus="{{ itype.vcpus }}" data-ram="{{ itype.ram_gb }}" data-slot="{{ itype.requires_slot|int }}">{{ itype.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
             <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
                 <label class="pf-v5-c-form__label" for="ocp_version">
                     <span class="pf-v5-c-form__label-text">OCP Version</span>
@@ -76,12 +88,13 @@
                            required placeholder="e.g. 4.20.1" pattern="[0-9]+\.[0-9]+\.[0-9]+">
                 </div>
             </div>
-            <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
-                <label class="pf-v5-c-form__label" for="cluster_name">
+            <!-- UPI: slot dropdown -->
+            <div class="pf-v5-c-form__group" id="slot-group" style="flex: 1; min-width: 180px;">
+                <label class="pf-v5-c-form__label" for="cluster_slot">
                     <span class="pf-v5-c-form__label-text">Cluster Slot</span>
                 </label>
                 <div class="pf-v5-c-form__group-control">
-                    <select class="pf-v5-c-form-control" id="cluster_name" name="cluster_name" required>
+                    <select class="pf-v5-c-form-control" id="cluster_slot" name="cluster_name">
                         {% if available_slots %}
                             {% for slot in available_slots %}
                             <option value="{{ slot }}">{{ slot }}</option>
@@ -92,8 +105,19 @@
                     </select>
                 </div>
             </div>
-            <div class="pf-v5-c-form__group">
+            <!-- IPI: free-text name -->
+            <div class="pf-v5-c-form__group" id="name-group" style="flex: 1; min-width: 180px; display: none;">
+                <label class="pf-v5-c-form__label" for="cluster_name_input">
+                    <span class="pf-v5-c-form__label-text">Cluster Name</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="cluster_name_input" name="cluster_name_ipi"
+                           placeholder="e.g. ipi1, dev" pattern="[a-z0-9][a-z0-9\-]{0,14}" maxlength="15">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="display: flex; align-items: flex-end; gap: 0.75rem;">
                 <button class="pf-v5-c-button pf-m-primary" type="submit">Deploy Cluster</button>
+                <span id="resource-cost" style="font-size: 0.78rem; color: #8a8d90; white-space: nowrap;"></span>
             </div>
         </form>
     </div>
@@ -226,6 +250,41 @@
 var SSH_USER = "{{ ssh_user }}";
 var HOSTNAME = "{{ hostname }}";
 var BASE_DOMAIN = "{{ base_domain }}";
+
+function toggleInstallType() {
+    var sel = document.getElementById('install_type');
+    var opt = sel.options[sel.selectedIndex];
+    var requiresSlot = opt.getAttribute('data-slot') === '1';
+    var vcpus = opt.getAttribute('data-vcpus');
+    var ram = opt.getAttribute('data-ram');
+    document.getElementById('slot-group').style.display = requiresSlot ? '' : 'none';
+    document.getElementById('name-group').style.display = requiresSlot ? 'none' : '';
+    // Toggle required/disabled so only the visible input submits
+    document.getElementById('cluster_slot').disabled = !requiresSlot;
+    document.getElementById('cluster_name_input').disabled = requiresSlot;
+    document.getElementById('resource-cost').textContent = vcpus + ' vCPUs, ' + ram + 'G RAM';
+}
+
+// Fix form: copy IPI name into the real cluster_name field before submit
+document.addEventListener('DOMContentLoaded', function() {
+    toggleInstallType();
+    document.getElementById('deploy-form').addEventListener('submit', function(e) {
+        var sel = document.getElementById('install_type');
+        var opt = sel.options[sel.selectedIndex];
+        var requiresSlot = opt.getAttribute('data-slot') === '1';
+        if (!requiresSlot) {
+            // IPI: copy the free-text name into the slot select (disabled), or add a hidden input
+            var nameVal = document.getElementById('cluster_name_input').value.trim();
+            if (!nameVal) { e.preventDefault(); alert('Cluster name is required.'); return; }
+            // Remove any existing hidden cluster_name to avoid duplicates
+            var existing = document.querySelector('input[name="cluster_name"][type="hidden"]');
+            if (existing) existing.remove();
+            var hidden = document.createElement('input');
+            hidden.type = 'hidden'; hidden.name = 'cluster_name'; hidden.value = nameVal;
+            this.appendChild(hidden);
+        }
+    });
+});
 
 function copyText(elemId, btn) {
     var text = document.getElementById(elemId).textContent;

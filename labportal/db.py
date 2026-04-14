@@ -111,5 +111,10 @@ def init_db():
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE deployments ADD COLUMN ip_offset INTEGER")
 
+    try:
+        conn.execute("SELECT install_type FROM deployments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE deployments ADD COLUMN install_type TEXT DEFAULT 'upi'")
+
     conn.commit()
     conn.close()

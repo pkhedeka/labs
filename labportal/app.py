@@ -7,7 +7,10 @@ import hashlib
 import json
 import os
 import pty
+import re
 import secrets
+import urllib.request
+import urllib.error
 import select
 import signal
 import struct
@@ -840,6 +843,46 @@ def user_logout():
     return redirect(url_for("index"))
 
 
+def _find_next_ipi_offset(clusters):
+    """Find the next available IPI IP offset (blocks of 10 from 140-190)."""
+    # Collect used offsets from DB
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT ip_offset FROM deployments WHERE install_type='ipi' AND status IN ('deploying','completed')"
+    ).fetchall()
+    conn.close()
+    used_offsets = {row["ip_offset"] for row in rows if row["ip_offset"]}
+    # Also check running VMs to catch manually deployed clusters
+    for name in clusters:
+        for vm in clusters[name]:
+            if vm["state"] == "running":
+                # Check if any VM IP falls in IPI range
+                pass
+    for offset in range(config.IPI_OFFSET_START, config.IPI_OFFSET_END + 1, config.IPI_OFFSET_STEP):
+        if offset not in used_offsets:
+            return offset
+    return None
+
+
+def _check_resources(install_type):
+    """Check if enough CPU and RAM are available for the given install type."""
+    _, _, resources = get_lab_status()
+    cpus_total = int(resources.get("cpus", 0))
+    cpus_used = int(resources.get("cpus_used", 0))
+    ram_total = int(resources.get("ram_total", 0))
+    ram_used = int(resources.get("ram_used", 0))
+
+    itype = config.INSTALL_TYPES.get(install_type, {})
+    cpus_free = cpus_total - cpus_used
+    ram_free = ram_total - ram_used
+
+    if cpus_free < itype.get("vcpus", 0):
+        return False, f"Not enough CPUs: {cpus_free} free, need {itype['vcpus']}"
+    if ram_free < itype.get("ram_gb", 0):
+        return False, f"Not enough RAM: {ram_free}G free, need {itype['ram_gb']}G"
+    return True, "OK"
+
+
 @app.route("/user/dashboard")
 @user_login_required
 def user_dashboard():
@@ -853,6 +896,7 @@ def user_dashboard():
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
                            available_slots=available_slots,
+                           install_types=config.INSTALL_TYPES,
                            ssh_user=ssh_user, base_domain=domain,
                            cluster_versions=cluster_versions)
 
@@ -890,20 +934,37 @@ def cluster_kubeconfig(cluster_name):
 def cluster_create():
     cluster_name = request.form.get("cluster_name", "").strip()
     ocp_version = request.form.get("ocp_version", "").strip()
+    install_type = request.form.get("install_type", "upi").strip()
 
     if not cluster_name or not ocp_version:
         flash("Cluster name and OCP version are required.", "danger")
         return redirect(url_for("user_dashboard"))
 
-    slots = config.cluster_slots()
-    if cluster_name not in slots:
-        flash(f"Invalid cluster slot '{cluster_name}'. Choose from: {', '.join(sorted(slots))}.", "danger")
+    if install_type not in config.INSTALL_TYPES:
+        flash(f"Invalid install type '{install_type}'.", "danger")
         return redirect(url_for("user_dashboard"))
 
-    ip_offset = slots[cluster_name]
+    itype = config.INSTALL_TYPES[install_type]
+    vms, clusters, _ = get_lab_status()
+
+    if install_type == "upi":
+        # UPI: validate cluster_name is a configured slot
+        slots = config.cluster_slots()
+        if cluster_name not in slots:
+            flash(f"Invalid cluster slot '{cluster_name}'. Choose from: {', '.join(sorted(slots))}.", "danger")
+            return redirect(url_for("user_dashboard"))
+        ip_offset = slots[cluster_name]
+    else:
+        # IPI (and future types): cluster_name is user-provided
+        if not re.match(r'^[a-z0-9][a-z0-9\-]{0,14}$', cluster_name):
+            flash("Cluster name must be lowercase alphanumeric (may include hyphens), 1-15 characters.", "danger")
+            return redirect(url_for("user_dashboard"))
+        ip_offset = _find_next_ipi_offset(clusters)
+        if ip_offset is None:
+            flash("No IPI IP offset slots available. Delete an existing IPI cluster first.", "danger")
+            return redirect(url_for("user_dashboard"))
 
     # Check if cluster already exists (VMs running)
-    vms, clusters, _ = get_lab_status()
     if cluster_name in clusters:
         flash(f"Cluster '{cluster_name}' already exists.", "warning")
         return redirect(url_for("user_dashboard"))
@@ -915,13 +976,36 @@ def cluster_create():
                   "Please wait for it to finish before deploying a new cluster.", "warning")
             return redirect(url_for("user_dashboard"))
 
+    # Resource check
+    ok, msg = _check_resources(install_type)
+    if not ok:
+        flash(f"Cannot deploy {itype['label']}: {msg}", "danger")
+        return redirect(url_for("user_dashboard"))
+
+    # Validate OCP version exists on the mirror
+    mirror_url = f"https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{ocp_version}/"
+    try:
+        req = urllib.request.Request(mirror_url, method="HEAD")
+        resp = urllib.request.urlopen(req, timeout=10)
+        if resp.status != 200:
+            flash(f"OCP version {ocp_version} not found on the mirror.", "danger")
+            return redirect(url_for("user_dashboard"))
+    except urllib.error.HTTPError:
+        flash(f"OCP version {ocp_version} is not available. Check https://mirror.openshift.com/pub/openshift-v4/clients/ocp/ for valid versions.", "danger")
+        return redirect(url_for("user_dashboard"))
+    except Exception:
+        pass  # Network issue — let the deploy script handle it
+
+    # Select deploy script for this install type
+    deploy_script = itype["script"]
+
     # Start deployment in background, detached from portal process
     log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"
     try:
         env = os.environ.copy()
         env["BASE_DOMAIN"] = config.base_domain()
         proc = subprocess.Popen(
-            [config.DEPLOY_SCRIPT, ocp_version, cluster_name, str(ip_offset)],
+            [deploy_script, ocp_version, cluster_name, str(ip_offset)],
             stdout=open(log_file, "w"),
             stderr=subprocess.STDOUT,
             cwd="/root",
@@ -930,14 +1014,14 @@ def cluster_create():
         )
         conn = get_db()
         conn.execute(
-            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset) "
-            "VALUES (?, ?, 'deploying', ?, ?, ?, ?)",
-            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset)
+            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type) "
+            "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?)",
+            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type)
         )
         conn.commit()
         conn.close()
-        log_activity("cluster_deploy", f"{cluster_name} OCP {ocp_version}")
-        flash(f"Cluster '{cluster_name}' deployment started (OCP {ocp_version}). You will be notified via email upon successful installation.", "success")
+        log_activity("cluster_deploy", f"{cluster_name} {install_type.upper()} OCP {ocp_version}")
+        flash(f"Cluster '{cluster_name}' ({itype['label']}) deployment started (OCP {ocp_version}). You will be notified via email upon successful installation.", "success")
     except Exception as e:
         flash(f"Failed to start deployment: {e}", "danger")
 
@@ -969,6 +1053,16 @@ def cluster_delete():
             flash("You can only delete clusters you created.", "danger")
             return redirect(url_for("user_dashboard"))
 
+    # Look up install_type and ip_offset from DB
+    conn = get_db()
+    dep = conn.execute(
+        "SELECT install_type, ip_offset FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
+        (cluster_name,)
+    ).fetchone()
+    conn.close()
+    dep_install_type = dep["install_type"] if dep and dep["install_type"] else "upi"
+    dep_ip_offset = dep["ip_offset"] if dep else None
+
     errors = []
     for vm in clusters[cluster_name]:
         try:
@@ -985,6 +1079,59 @@ def cluster_delete():
                 errors.append(f"{vm['name']}: {result.stderr.strip()}")
         except Exception as e:
             errors.append(f"{vm['name']}: {e}")
+
+    # IPI-specific cleanup: VBMC, DHCP reservations, DNS blocks
+    if dep_install_type == "ipi" and dep_ip_offset is not None:
+        vm_prefix = f"vm-{cluster_name}"
+        mac_base = f"{dep_ip_offset:02x}"
+        num_masters = 3
+        vbmc_port_base = 6200 + dep_ip_offset - 100
+
+        # Stop/delete VBMC entries
+        for i in range(num_masters):
+            vm_name = f"{vm_prefix}-master-{i}"
+            try:
+                subprocess.run(["vbmc", "stop", vm_name],
+                               capture_output=True, timeout=10)
+            except Exception:
+                pass
+            try:
+                subprocess.run(["vbmc", "delete", vm_name],
+                               capture_output=True, timeout=10)
+            except Exception:
+                pass
+
+        # Remove DHCP reservations
+        for i in range(num_masters):
+            bm_mac = f"52:54:00:{mac_base}:01:{0x11 + i:02x}"
+            try:
+                subprocess.run(
+                    ["virsh", "net-update", "default", "delete", "ip-dhcp-host",
+                     f"<host mac='{bm_mac}'/>", "--live", "--config"],
+                    capture_output=True, timeout=10
+                )
+            except Exception:
+                pass
+
+        # Remove DNS blocks from IPI include files
+        fwd_zone = "/var/named/ipi-forward.include"
+        rev_zone = "/var/named/ipi-reverse.include"
+        for zone_file in (fwd_zone, rev_zone):
+            if os.path.isfile(zone_file):
+                try:
+                    subprocess.run(
+                        ["sed", "-i", f"/^; IPI-START {cluster_name}$/,/^; IPI-END {cluster_name}$/d", zone_file],
+                        capture_output=True, timeout=10
+                    )
+                except Exception as e:
+                    errors.append(f"DNS cleanup {zone_file}: {e}")
+
+        # Reload named to pick up zone changes
+        try:
+            subprocess.run(["systemctl", "reload", "named"],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
 
     # Delete deployment records and log files
     conn = get_db()
@@ -1122,8 +1269,9 @@ def terminal_connect(auth=None):
 
     pid, fd = pty.fork()
     if pid == 0:
-        # Child — become ocpterm
-        os.execlp("su", "su", "-", linux_user)
+        # Child — become ocpterm with TERM set for curses (watch, top, vi)
+        os.environ["TERM"] = "xterm-256color"
+        os.execlp("su", "su", "-", linux_user, "-w", "TERM")
     else:
         import time as _time
         terminal_sessions[request.sid] = {

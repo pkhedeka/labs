@@ -11,8 +11,31 @@ SECRET_KEY = os.environ.get("LABPORTAL_SECRET_KEY", secrets.token_hex(32))
 # Database path — must be known before DB exists
 DB_PATH = os.environ.get("LABPORTAL_DB", os.path.join(BASE_DIR, "labportal.db"))
 
-# Deploy script path — host-level config, not portal-level
-DEPLOY_SCRIPT = os.environ.get("LABPORTAL_DEPLOY_SCRIPT", "/root/ocp-upi-deploy.sh")
+# Deploy script paths — host-level config, not portal-level
+DEPLOY_SCRIPT = os.environ.get("LABPORTAL_DEPLOY_SCRIPT", "/root/labs/ocp-upi-deploy.sh")
+
+# Install types — resource costs and deploy scripts per installation method
+INSTALL_TYPES = {
+    "upi": {
+        "label": "UPI (User Provisioned)",
+        "script": os.environ.get("LABPORTAL_UPI_SCRIPT", "/root/labs/ocp-upi-deploy.sh"),
+        "vcpus": 16,    # 3×4 masters + 2×2 workers
+        "ram_gb": 80,    # 5×16G
+        "requires_slot": True,
+    },
+    "ipi": {
+        "label": "IPI Compact (Installer Provisioned)",
+        "script": os.environ.get("LABPORTAL_IPI_SCRIPT", "/root/labs/ocp-ipi-deploy.sh"),
+        "vcpus": 24,    # 3×8 masters
+        "ram_gb": 96,    # 3×32G
+        "requires_slot": False,
+    },
+}
+
+# IPI dynamic IP offset range (blocks of 10)
+IPI_OFFSET_START = 140
+IPI_OFFSET_END = 190
+IPI_OFFSET_STEP = 10
 
 
 # ---------------------------------------------------------------------------
