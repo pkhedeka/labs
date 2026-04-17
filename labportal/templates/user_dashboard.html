@@ -88,6 +88,17 @@
                            required placeholder="e.g. 4.20.1" pattern="[0-9]+\.[0-9]+\.[0-9]+">
                 </div>
             </div>
+            <div class="pf-v5-c-form__group" style="min-width: 150px;">
+                <label class="pf-v5-c-form__label" for="network_type">
+                    <span class="pf-v5-c-form__label-text">Network Plugin</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <select class="pf-v5-c-form-control" id="network_type" name="network_type">
+                        <option value="OVNKubernetes" selected>OVNKubernetes</option>
+                        <option value="OpenShiftSDN">OpenShiftSDN</option>
+                    </select>
+                </div>
+            </div>
             <!-- UPI: slot dropdown -->
             <div class="pf-v5-c-form__group" id="slot-group" style="flex: 1; min-width: 180px;">
                 <label class="pf-v5-c-form__label" for="cluster_slot">
@@ -113,6 +124,15 @@
                 <div class="pf-v5-c-form__group-control">
                     <input class="pf-v5-c-form-control" type="text" id="cluster_name_input" name="cluster_name_ipi"
                            placeholder="e.g. ipi1, dev" pattern="[a-z0-9][a-z0-9\-]{0,14}" maxlength="15">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
+                <label class="pf-v5-c-form__label" for="description">
+                    <span class="pf-v5-c-form__label-text">Purpose</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="description" name="description"
+                           placeholder="e.g. Testing CNI upgrade" maxlength="80">
                 </div>
             </div>
             <div class="pf-v5-c-form__group" style="display: flex; align-items: flex-end; gap: 0.75rem;">
@@ -141,6 +161,13 @@
                     <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
+                    {% set info = cluster_info.get(cluster_name, {}) %}
+                    {% if info.get('started_by') %}
+                    <span class="cluster-badge" style="background:#2b2b2b; color:#b8bbbe; border-color:#3c3f42;">{{ info.started_by.split('@')[0] }}</span>
+                    {% endif %}
+                    {% if info.get('description') %}
+                    <span class="cluster-badge" style="background:#1a2a1a; color:#92d400; border-color:#3e5622;">{{ info.description }}</span>
+                    {% endif %}
                     <div style="margin-left: auto; display: flex; gap: 0.5rem;">
                         <a href="{{ url_for('user_terminal', cluster=cluster_name) }}" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;" title="Open terminal with KUBECONFIG set">
                             &#x25B6; Terminal
@@ -152,6 +179,7 @@
                         <a href="{{ url_for('cluster_logs', cluster_name=cluster_name) }}" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;">
                             View Logs
                         </a>
+                        {% if session.get('admin') or info.get('started_by') == session.get('user_email') or not info.get('started_by') %}
                         <form method="post" action="{{ url_for('cluster_delete') }}"
                               onsubmit="return confirm('Delete cluster {{ cluster_name }}? This will destroy all {{ cluster_vms|length }} VMs and their storage.');">
                             <input type="hidden" name="cluster_name" value="{{ cluster_name }}">
@@ -159,6 +187,7 @@
                                 Delete Cluster
                             </button>
                         </form>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="vm-grid">
@@ -219,6 +248,12 @@
                 <pre class="code-block" style="margin:0;"><code id="cli-modal-console"></code></pre>
                 <button onclick="copyText('cli-modal-console', this)" class="copy-btn" title="Copy">&#x2398;</button>
             </div>
+            <p style="font-size:0.82rem; color:#8a8d90; margin-top:0.5rem;">To access the console from your local browser, set up a SOCKS proxy:</p>
+            <div style="position:relative; margin-bottom:0.4rem;">
+                <pre class="code-block" style="margin:0;"><code id="cli-modal-socks"></code></pre>
+                <button onclick="copyText('cli-modal-socks', this)" class="copy-btn" title="Copy">&#x2398;</button>
+            </div>
+            <p style="font-size:0.82rem; color:#8a8d90;">Then configure your browser to use <code>localhost:9090</code> as a SOCKS5 proxy (enable "Proxy DNS" / "DNS over SOCKS"), and open the console URL above.</p>
         </div>
 
         <div style="margin-bottom:1rem; border-top:1px solid #3c3f42; padding-top:1rem;">
@@ -265,9 +300,26 @@ function toggleInstallType() {
     document.getElementById('resource-cost').textContent = vcpus + ' vCPUs, ' + ram + 'G RAM';
 }
 
+function updateNetworkTypeOptions() {
+    var ver = document.getElementById('ocp_version').value.trim();
+    var sdnOpt = document.querySelector('#network_type option[value="OpenShiftSDN"]');
+    var sel = document.getElementById('network_type');
+    var parts = ver.match(/^(\d+)\.(\d+)/);
+    if (parts && (parseInt(parts[1]) > 4 || (parseInt(parts[1]) === 4 && parseInt(parts[2]) > 14))) {
+        sdnOpt.disabled = true;
+        sdnOpt.textContent = 'OpenShiftSDN (4.14 and below)';
+        if (sel.value === 'OpenShiftSDN') sel.value = 'OVNKubernetes';
+    } else {
+        sdnOpt.disabled = false;
+        sdnOpt.textContent = 'OpenShiftSDN';
+    }
+}
+
 // Fix form: copy IPI name into the real cluster_name field before submit
 document.addEventListener('DOMContentLoaded', function() {
     toggleInstallType();
+    updateNetworkTypeOptions();
+    document.getElementById('ocp_version').addEventListener('input', updateNetworkTypeOptions);
     document.getElementById('deploy-form').addEventListener('submit', function(e) {
         var sel = document.getElementById('install_type');
         var opt = sel.options[sel.selectedIndex];
@@ -316,6 +368,8 @@ function showCliModal(clusterName, version) {
         'export KUBECONFIG=/kvm/clusters/' + dirName + '/auth/kubeconfig';
     document.getElementById('cli-modal-console').textContent =
         'https://console-openshift-console.apps.' + clusterName + '.' + BASE_DOMAIN;
+    document.getElementById('cli-modal-socks').textContent =
+        'ssh -D 9090 -N -f ' + SSH_USER + '@' + HOSTNAME;
     var downloadUrl = '/labs/cluster/kubeconfig/' + clusterName;
     document.getElementById('cli-modal-download').href = downloadUrl;
     document.getElementById('cli-modal-scp').textContent =

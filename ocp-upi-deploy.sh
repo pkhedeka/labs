@@ -4,10 +4,11 @@ set -euo pipefail
 # =============================================================================
 # OpenShift UPI Bare-Metal Deployment Script (KVM/libvirt)
 #
-# Usage: ./create.sh <ocp_version> [cluster_name]
+# Usage: ./create.sh <ocp_version> [cluster_name] [ip_offset] [network_type]
 #   ocp_version  - e.g. 4.16.5
 #   cluster_name - optional, defaults to "upi". Use distinct names to run
 #                  multiple clusters in parallel without collision.
+#   network_type - optional, OVNKubernetes (default) or OpenShiftSDN (4.14 and below)
 # =============================================================================
 
 # --- CONFIGURATION ---
@@ -44,6 +45,7 @@ NETMASK="255.255.255.0"
 # Defaults to 110 for backward compatibility with existing DNS zones.
 # For parallel clusters, pass a different offset (e.g., ./ocp-upi-deploy.sh 4.20.1 lab 150)
 IP_OFFSET="${3:-${IP_OFFSET:-110}}"
+NETWORK_TYPE="${4:-OVNKubernetes}"
 
 # Derive per-cluster MAC suffix from offset
 MAC_BASE=$(printf "%02x" "$IP_OFFSET")
@@ -286,7 +288,7 @@ networking:
   clusterNetwork:
   - cidr: 10.128.0.0/14
     hostPrefix: 23
-  networkType: OVNKubernetes
+  networkType: ${NETWORK_TYPE}
   serviceNetwork:
   - 172.30.0.0/16
 platform:

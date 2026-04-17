@@ -8,11 +8,12 @@ set -euo pipefail
 # bare-metal servers via VirtualBMC (IPMI). The installer manages bootstrap,
 # PXE provisioning (ironic), and load balancing (keepalived) automatically.
 #
-# Usage: ./ocp-ipi-deploy.sh <ocp_version> [cluster_name] [ip_offset]
+# Usage: ./ocp-ipi-deploy.sh <ocp_version> [cluster_name] [ip_offset] [network_type]
 #   ocp_version  - e.g. 4.17.0
 #   cluster_name - optional, defaults to "ipi1"
 #   ip_offset    - optional, defaults to 140
 #                  API VIP = .offset, Ingress VIP = .offset+1, masters = .offset+2..4
+#   network_type - optional, OVNKubernetes (default) or OpenShiftSDN (4.14 and below)
 #
 # Prerequisites:
 #   - VirtualBMC daemon running (vbmcd)
@@ -33,11 +34,13 @@ BASE_DOMAIN="${BASE_DOMAIN:-example.com}"
 VERSION="${1:-}"
 CLUSTER_NAME="${2:-ipi1}"
 IP_OFFSET="${3:-${IP_OFFSET:-140}}"
+NETWORK_TYPE="${4:-OVNKubernetes}"
 
 if [ -z "$VERSION" ]; then
-    echo "Usage: $0 <ocp_version> [cluster_name] [ip_offset]"
+    echo "Usage: $0 <ocp_version> [cluster_name] [ip_offset] [network_type]"
     echo "  cluster_name defaults to 'ipi1' if omitted"
     echo "  ip_offset defaults to 140 (VIPs at .140/.141, masters .142-.144)"
+    echo "  network_type defaults to OVNKubernetes (use OpenShiftSDN for 4.14 and below)"
     exit 1
 fi
 
@@ -478,7 +481,7 @@ baseDomain: ${BASE_DOMAIN}
 metadata:
   name: ${CLUSTER_NAME}
 networking:
-  networkType: OVNKubernetes
+  networkType: ${NETWORK_TYPE}
   clusterNetwork:
   - cidr: 10.128.0.0/14
     hostPrefix: 23

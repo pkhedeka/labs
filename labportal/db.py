@@ -116,5 +116,10 @@ def init_db():
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE deployments ADD COLUMN install_type TEXT DEFAULT 'upi'")
 
+    try:
+        conn.execute("SELECT description FROM deployments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE deployments ADD COLUMN description TEXT DEFAULT ''")
+
     conn.commit()
     conn.close()

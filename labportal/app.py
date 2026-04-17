@@ -157,6 +157,23 @@ def generate_password(length=12):
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def get_cluster_info(clusters):
+    """Get deployment metadata (creator, description, install_type) per cluster from DB."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cluster_name, started_by, description, install_type FROM deployments WHERE status IN ('deploying','completed')"
+    ).fetchall()
+    conn.close()
+    info = {}
+    for row in rows:
+        info[row["cluster_name"]] = {
+            "started_by": row["started_by"] or "",
+            "description": row["description"] or "",
+            "install_type": row["install_type"] or "upi",
+        }
+    return info
+
+
 def get_cluster_versions(clusters):
     """Get OCP version per cluster — DB first, then fall back to /kvm/clusters/ dirs."""
     import glob
@@ -892,13 +909,15 @@ def user_dashboard():
     ssh_user = derive_linux_username(session.get("user_email", ""))
     domain = config.base_domain()
     cluster_versions = get_cluster_versions(clusters)
+    cluster_info = get_cluster_info(clusters)
     return render_template("user_dashboard.html",
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
                            available_slots=available_slots,
                            install_types=config.INSTALL_TYPES,
                            ssh_user=ssh_user, base_domain=domain,
-                           cluster_versions=cluster_versions)
+                           cluster_versions=cluster_versions,
+                           cluster_info=cluster_info)
 
 
 # --- Cluster Management ---
@@ -935,10 +954,26 @@ def cluster_create():
     cluster_name = request.form.get("cluster_name", "").strip()
     ocp_version = request.form.get("ocp_version", "").strip()
     install_type = request.form.get("install_type", "upi").strip()
+    network_type = request.form.get("network_type", "OVNKubernetes").strip()
+    description = request.form.get("description", "").strip()[:80]
 
     if not cluster_name or not ocp_version:
         flash("Cluster name and OCP version are required.", "danger")
         return redirect(url_for("user_dashboard"))
+
+    if network_type not in ("OVNKubernetes", "OpenShiftSDN"):
+        flash("Invalid network type.", "danger")
+        return redirect(url_for("user_dashboard"))
+
+    # OpenShiftSDN only supported on OCP 4.14 and below
+    if network_type == "OpenShiftSDN":
+        try:
+            major, minor = ocp_version.split(".")[:2]
+            if int(major) > 4 or (int(major) == 4 and int(minor) > 14):
+                flash("OpenShiftSDN is only available on OCP 4.14 and below. Use OVNKubernetes for newer versions.", "danger")
+                return redirect(url_for("user_dashboard"))
+        except (ValueError, IndexError):
+            pass
 
     if install_type not in config.INSTALL_TYPES:
         flash(f"Invalid install type '{install_type}'.", "danger")
@@ -1005,7 +1040,7 @@ def cluster_create():
         env = os.environ.copy()
         env["BASE_DOMAIN"] = config.base_domain()
         proc = subprocess.Popen(
-            [deploy_script, ocp_version, cluster_name, str(ip_offset)],
+            [deploy_script, ocp_version, cluster_name, str(ip_offset), network_type],
             stdout=open(log_file, "w"),
             stderr=subprocess.STDOUT,
             cwd="/root",
@@ -1014,9 +1049,9 @@ def cluster_create():
         )
         conn = get_db()
         conn.execute(
-            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type) "
-            "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?)",
-            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type)
+            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
+            "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?)",
+            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description)
         )
         conn.commit()
         conn.close()
