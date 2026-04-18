@@ -223,6 +223,14 @@ body.pf-v5-c-page {
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.cluster-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-left: auto;
 }
 
 .cluster-dot {
@@ -262,8 +270,14 @@ body.pf-v5-c-page {
 /* VM grid */
 .vm-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.5rem;
+}
+
+@media (min-width: 900px) {
+    .vm-grid {
+        grid-template-columns: repeat(6, 1fr);
+    }
 }
 
 .vm-tile {

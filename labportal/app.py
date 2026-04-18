@@ -418,8 +418,9 @@ def api_status():
     for name, cvms in clusters.items():
         clusters_data[name] = cvms
     cluster_versions = get_cluster_versions(clusters)
+    cluster_info = get_cluster_info(clusters)
     return jsonify(vms=vms, clusters=clusters_data, resources=resources,
-                   cluster_versions=cluster_versions)
+                   cluster_versions=cluster_versions, cluster_info=cluster_info)
 
 
 @app.route("/")

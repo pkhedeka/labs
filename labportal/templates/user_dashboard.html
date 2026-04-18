@@ -168,7 +168,7 @@
                     {% if info.get('description') %}
                     <span class="cluster-badge" style="background:#1a2a1a; color:#92d400; border-color:#3e5622;">{{ info.description }}</span>
                     {% endif %}
-                    <div style="margin-left: auto; display: flex; gap: 0.5rem;">
+                    <div class="cluster-actions">
                         <a href="{{ url_for('user_terminal', cluster=cluster_name) }}" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;" title="Open terminal with KUBECONFIG set">
                             &#x25B6; Terminal
                         </a>
@@ -285,6 +285,8 @@
 var SSH_USER = "{{ ssh_user }}";
 var HOSTNAME = "{{ hostname }}";
 var BASE_DOMAIN = "{{ base_domain }}";
+var CURRENT_USER = "{{ session.get('user_email', '') }}";
+var IS_ADMIN = {{ 'true' if session.get('admin') else 'false' }};
 
 function toggleInstallType() {
     var sel = document.getElementById('install_type');
@@ -424,10 +426,12 @@ document.addEventListener('keydown', function(e) {
                 }
                 let html = '';
                 const versions = data.cluster_versions || {};
+                const cInfo = data.cluster_info || {};
                 clusterNames.forEach(name => {
                     const vms = data.clusters[name];
                     const runCount = vms.filter(v => v.state === 'running').length;
                     const badgeClass = runCount === vms.length ? 'badge-ok' : 'badge-warn';
+                    const info = cInfo[name] || {};
                     html += '<div class="cluster-group"><div class="cluster-header">';
                     html += '<span class="cluster-dot"></span>';
                     html += '<span class="cluster-name">' + name + '</span>';
@@ -435,15 +439,23 @@ document.addEventListener('keydown', function(e) {
                         html += '<span class="cluster-badge" style="background:#1f6bff22;color:#73bcf7;border-color:#1f6bff55;">OCP ' + versions[name] + '</span>';
                     }
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
+                    if (info.started_by) {
+                        html += '<span class="cluster-badge" style="background:#2b2b2b;color:#b8bbbe;border-color:#3c3f42;">' + info.started_by.split('@')[0] + '</span>';
+                    }
+                    if (info.description) {
+                        html += '<span class="cluster-badge" style="background:#1a2a1a;color:#92d400;border-color:#3e5622;">' + info.description + '</span>';
+                    }
                     var ver = versions[name] || '';
-                    html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';
+                    html += '<div class="cluster-actions">';
                     html += '<a href="/labs/user/terminal?cluster=' + name + '" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;" title="Open terminal with KUBECONFIG set">&#x25B6; Terminal</a>';
                     html += '<button type="button" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;" onclick="showCliModal(\'' + name + '\', \'' + ver + '\')">CLI Access</button>';
                     html += '<a href="/labs/cluster/logs/' + name + '" class="pf-v5-c-button pf-m-secondary pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">View Logs</a>';
+                    if (IS_ADMIN || info.started_by === CURRENT_USER || !info.started_by) {
                     html += '<form method="post" action="/labs/cluster/delete" onsubmit="return confirm(\'Delete cluster ' + name + '?\');">';
                     html += '<input type="hidden" name="cluster_name" value="' + name + '">';
-                    html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form></div>';
-                    html += '</div><div class="vm-grid">';
+                    html += '<button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small" style="font-size:0.75rem;padding:0.2rem 0.6rem;">Delete Cluster</button></form>';
+                    }
+                    html += '</div></div><div class="vm-grid">';
                     vms.forEach(vm => {
                         const stateClass = vm.state === 'running' ? 'vm-running' : 'vm-off';
                         const dotClass = vm.state === 'running' ? 'dot-green' : 'dot-red';
