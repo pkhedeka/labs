@@ -24,10 +24,10 @@ INSTALL_TYPES = {
         "requires_slot": True,
     },
     "ipi": {
-        "label": "IPI Compact (Installer Provisioned)",
+        "label": "IPI (Installer Provisioned)",
         "script": os.environ.get("LABPORTAL_IPI_SCRIPT", "/root/labs/ocp-ipi-deploy.sh"),
-        "vcpus": 24,    # 3×8 masters
-        "ram_gb": 96,    # 3×32G
+        "vcpus": 32,    # 3×8 masters + 2×4 workers
+        "ram_gb": 128,   # 3×32G + 2×16G
         "requires_slot": False,
     },
 }

@@ -4,7 +4,7 @@ set -euo pipefail
 # =============================================================================
 # OpenShift IPI Bare-Metal Deployment Script (KVM/libvirt + VBMC)
 #
-# Deploys a compact 3-node (masters-only) IPI cluster using VMs that simulate
+# Deploys a 3-master + 2-worker IPI cluster using VMs that simulate
 # bare-metal servers via VirtualBMC (IPMI). The installer manages bootstrap,
 # PXE provisioning (ironic), and load balancing (keepalived) automatically.
 #
@@ -12,7 +12,7 @@ set -euo pipefail
 #   ocp_version  - e.g. 4.17.0
 #   cluster_name - optional, defaults to "ipi1"
 #   ip_offset    - optional, defaults to 140
-#                  API VIP = .offset, Ingress VIP = .offset+1, masters = .offset+2..4
+#                  API VIP = .offset, Ingress VIP = .offset+1, masters = .offset+2..4, workers = .offset+5..6
 #   network_type - optional, OVNKubernetes (default) or OpenShiftSDN (4.14 and below)
 #
 # Prerequisites:
@@ -71,8 +71,9 @@ VBMC_PASS="password"
 # Per-cluster VM name prefix
 VM_PREFIX="vm-${CLUSTER_NAME}"
 
-# Node count — compact 3-node (masters only, schedulable)
+# Node count
 NUM_MASTERS=3
+NUM_WORKERS=2
 
 # Pull secret and SSH key
 PULL_SECRET_FILE="${PULL_SECRET_FILE:-/root/pull-secret.txt}"
@@ -95,6 +96,11 @@ cleanup_ipi() {
         virsh destroy "$vm" 2>/dev/null || true
         virsh undefine "$vm" --remove-all-storage 2>/dev/null || true
     done
+    for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+        local vm="${prefix}-worker-${i}"
+        virsh destroy "$vm" 2>/dev/null || true
+        virsh undefine "$vm" --remove-all-storage 2>/dev/null || true
+    done
     # IPI may create a bootstrap VM
     virsh destroy "${prefix}-bootstrap" 2>/dev/null || true
     virsh undefine "${prefix}-bootstrap" --remove-all-storage 2>/dev/null || true
@@ -105,10 +111,22 @@ cleanup_ipi() {
         vbmc stop "$vm" 2>/dev/null || true
         vbmc delete "$vm" 2>/dev/null || true
     done
+    for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+        local vm="${prefix}-worker-${i}"
+        vbmc stop "$vm" 2>/dev/null || true
+        vbmc delete "$vm" 2>/dev/null || true
+    done
 
-    # Remove DHCP reservations
+    # Remove DHCP reservations (masters)
     for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
         local bm_mac="52:54:00:${MAC_BASE}:01:$(printf '%02x' $(( 0x11 + i )))"
+        virsh net-update default delete ip-dhcp-host \
+            "<host mac='$bm_mac'/>" \
+            --live --config 2>/dev/null || true
+    done
+    # Remove DHCP reservations (workers)
+    for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+        local bm_mac="52:54:00:${MAC_BASE}:01:$(printf '%02x' $(( 0x21 + i )))"
         virsh net-update default delete ip-dhcp-host \
             "<host mac='$bm_mac'/>" \
             --live --config 2>/dev/null || true
@@ -200,9 +218,16 @@ for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
         preflight_ok=false
     fi
 done
+for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+    if virsh dominfo "${VM_PREFIX}-worker-${i}" &>/dev/null; then
+        echo "FAIL: VM '${VM_PREFIX}-worker-${i}' already exists. Delete it first or use a different cluster name."
+        preflight_ok=false
+    fi
+done
 
 # Check VBMC ports are free
-for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
+TOTAL_NODES=$(( NUM_MASTERS + NUM_WORKERS ))
+for i in $(seq 0 $(( TOTAL_NODES - 1 ))); do
     local_port=$(( VBMC_PORT_BASE + i ))
     if vbmc list 2>/dev/null | grep -q ":.*${local_port}"; then
         echo "FAIL: VBMC port $local_port already in use."
@@ -210,12 +235,12 @@ for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
     fi
 done
 
-# RAM check — 3 masters × 32G = 96G
+# RAM check — 3 masters × 32G + 2 workers × 16G = 128G
 AVAIL_RAM_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
 AVAIL_RAM_GB=$(( AVAIL_RAM_KB / 1024 / 1024 ))
-REQUIRED_RAM_GB=90
+REQUIRED_RAM_GB=$(( NUM_MASTERS * 32 + NUM_WORKERS * 16 - 6 ))
 if [ "$AVAIL_RAM_GB" -lt "$REQUIRED_RAM_GB" ]; then
-    echo "WARN: Only ${AVAIL_RAM_GB} GB RAM available, IPI compact cluster needs ~96 GB."
+    echo "WARN: Only ${AVAIL_RAM_GB} GB RAM available, IPI cluster needs ~$(( NUM_MASTERS * 32 + NUM_WORKERS * 16 )) GB."
     echo "      Deployment may fail or be very slow."
 fi
 
@@ -233,9 +258,9 @@ if [ "$preflight_ok" = false ]; then
 fi
 
 # Ensure VBMC UDP ports are open in the libvirt firewall zone
-firewall-cmd --zone=libvirt --query-port=${VBMC_PORT_BASE}-$(( VBMC_PORT_BASE + NUM_MASTERS - 1 ))/udp &>/dev/null || \
-    firewall-cmd --zone=libvirt --add-port=${VBMC_PORT_BASE}-$(( VBMC_PORT_BASE + NUM_MASTERS - 1 ))/udp --permanent &>/dev/null
-firewall-cmd --zone=libvirt --add-port=${VBMC_PORT_BASE}-$(( VBMC_PORT_BASE + NUM_MASTERS - 1 ))/udp &>/dev/null || true
+firewall-cmd --zone=libvirt --query-port=${VBMC_PORT_BASE}-$(( VBMC_PORT_BASE + TOTAL_NODES - 1 ))/udp &>/dev/null || \
+    firewall-cmd --zone=libvirt --add-port=${VBMC_PORT_BASE}-$(( VBMC_PORT_BASE + TOTAL_NODES - 1 ))/udp --permanent &>/dev/null
+firewall-cmd --zone=libvirt --add-port=${VBMC_PORT_BASE}-$(( VBMC_PORT_BASE + TOTAL_NODES - 1 ))/udp &>/dev/null || true
 
 echo "=== Pre-flight checks passed ==="
 echo ""
@@ -244,7 +269,8 @@ echo "OCP Version:   $VERSION"
 echo "API VIP:       $API_VIP"
 echo "Ingress VIP:   $INGRESS_VIP"
 echo "Masters:       192.168.122.$(( IP_OFFSET + 2 )) - 192.168.122.$(( IP_OFFSET + 4 ))"
-echo "VBMC ports:    $VBMC_PORT_BASE - $(( VBMC_PORT_BASE + NUM_MASTERS - 1 ))"
+echo "Workers:       192.168.122.$(( IP_OFFSET + 5 )) - 192.168.122.$(( IP_OFFSET + 4 + NUM_WORKERS ))"
+echo "VBMC ports:    $VBMC_PORT_BASE - $(( VBMC_PORT_BASE + TOTAL_NODES - 1 ))"
 echo ""
 
 mkdir -p "$BASE_DIR" "$INSTALL_DIR"
@@ -354,6 +380,45 @@ for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
         --live --config 2>/dev/null || true
 done
 
+# Worker VMs — smaller specs than masters
+for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+    vm_name="${VM_PREFIX}-worker-${i}"
+    prov_mac="52:54:00:${MAC_BASE}:01:$(printf '%02x' $(( 0x05 + i )))"
+    bm_mac="52:54:00:${MAC_BASE}:01:$(printf '%02x' $(( 0x21 + i )))"
+    worker_ip="192.168.122.$(( IP_OFFSET + 5 + i ))"
+    hostname="worker-${i}.${CLUSTER_NAME}.${BASE_DOMAIN}"
+
+    PROV_MACS+=("$prov_mac")
+    BM_MACS+=("$bm_mac")
+
+    virsh destroy "$vm_name" 2>/dev/null || true
+    virsh undefine "$vm_name" --remove-all-storage 2>/dev/null || true
+    ssh-keygen -R "$worker_ip" 2>/dev/null || true
+
+    echo "Creating VM: $vm_name (prov=$prov_mac, bm=$bm_mac)"
+    virt-install --name "$vm_name" \
+        --ram 16384 \
+        --vcpus 4 \
+        --cpu host-passthrough \
+        --disk size=120,bus=virtio \
+        --network network=provisioning,mac="$prov_mac" \
+        --network network=default,mac="$bm_mac" \
+        --pxe \
+        --boot network,hd \
+        --graphics vnc,listen=127.0.0.1 \
+        --video virtio \
+        --noautoconsole \
+        --os-variant "$OS_VARIANT" \
+        --noreboot
+
+    virsh destroy "$vm_name" 2>/dev/null || true
+
+    echo "Adding DHCP reservation: $bm_mac -> $worker_ip ($hostname)"
+    virsh net-update default add ip-dhcp-host \
+        "<host mac='$bm_mac' name='$hostname' ip='$worker_ip'/>" \
+        --live --config 2>/dev/null || true
+done
+
 echo "VMs created successfully."
 
 # --- 3. VBMC SETUP ---
@@ -378,12 +443,33 @@ for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
     vbmc start "$vm_name"
 done
 
+for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+    vm_name="${VM_PREFIX}-worker-${i}"
+    vbmc_port=$(( VBMC_PORT_BASE + NUM_MASTERS + i ))
+
+    vbmc stop "$vm_name" 2>/dev/null || true
+    vbmc delete "$vm_name" 2>/dev/null || true
+
+    echo "Creating VBMC: $vm_name on port $vbmc_port"
+    vbmc add "$vm_name" \
+        --port "$vbmc_port" \
+        --address "$PROV_BRIDGE_IP" \
+        --username "$VBMC_USER" \
+        --password "$VBMC_PASS"
+
+    vbmc start "$vm_name"
+done
+
 # Verify VBMC is responding
 echo ""
 echo "Verifying VBMC connectivity..."
-for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
+for i in $(seq 0 $(( TOTAL_NODES - 1 ))); do
     vbmc_port=$(( VBMC_PORT_BASE + i ))
-    vm_name="${VM_PREFIX}-master-${i}"
+    if [ "$i" -lt "$NUM_MASTERS" ]; then
+        vm_name="${VM_PREFIX}-master-${i}"
+    else
+        vm_name="${VM_PREFIX}-worker-$(( i - NUM_MASTERS ))"
+    fi
     status=$(ipmitool -I lanplus -H "$PROV_BRIDGE_IP" -p "$vbmc_port" \
         -U "$VBMC_USER" -P "$VBMC_PASS" power status 2>&1 || true)
     if echo "$status" | grep -qi "off\|on"; then
@@ -409,7 +495,7 @@ sed -i "/^; IPI-START ${CLUSTER_NAME}$/,/^; IPI-END ${CLUSTER_NAME}$/d" "$REV_ZO
 # Forward records
 cat >> "$FWD_ZONE" <<DNS_FWD
 ; IPI-START ${CLUSTER_NAME}
-; Cluster: ${CLUSTER_NAME} (IPI compact, offset ${IP_OFFSET})
+; Cluster: ${CLUSTER_NAME} (IPI 3+2, offset ${IP_OFFSET})
 api.${CLUSTER_NAME}.${BASE_DOMAIN}.		IN	A	${API_VIP}
 api-int.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	${API_VIP}
 *.apps.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	${INGRESS_VIP}
@@ -417,6 +503,9 @@ api-int.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	${API_VIP}
 master-0.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	192.168.122.$(( IP_OFFSET + 2 ))
 master-1.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	192.168.122.$(( IP_OFFSET + 3 ))
 master-2.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	192.168.122.$(( IP_OFFSET + 4 ))
+;
+worker-0.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	192.168.122.$(( IP_OFFSET + 5 ))
+worker-1.${CLUSTER_NAME}.${BASE_DOMAIN}.	IN	A	192.168.122.$(( IP_OFFSET + 6 ))
 ; IPI-END ${CLUSTER_NAME}
 ;EOF
 DNS_FWD
@@ -429,6 +518,8 @@ $(( IP_OFFSET + 1 ))	IN	PTR	ingress.${CLUSTER_NAME}.${BASE_DOMAIN}.
 $(( IP_OFFSET + 2 ))	IN	PTR	master-0.${CLUSTER_NAME}.${BASE_DOMAIN}.
 $(( IP_OFFSET + 3 ))	IN	PTR	master-1.${CLUSTER_NAME}.${BASE_DOMAIN}.
 $(( IP_OFFSET + 4 ))	IN	PTR	master-2.${CLUSTER_NAME}.${BASE_DOMAIN}.
+$(( IP_OFFSET + 5 ))	IN	PTR	worker-0.${CLUSTER_NAME}.${BASE_DOMAIN}.
+$(( IP_OFFSET + 6 ))	IN	PTR	worker-1.${CLUSTER_NAME}.${BASE_DOMAIN}.
 ; IPI-END ${CLUSTER_NAME}
 ;EOF
 DNS_REV
@@ -474,6 +565,20 @@ for i in $(seq 0 $(( NUM_MASTERS - 1 ))); do
         deviceName: /dev/vda
 "
 done
+for i in $(seq 0 $(( NUM_WORKERS - 1 ))); do
+    vbmc_port=$(( VBMC_PORT_BASE + NUM_MASTERS + i ))
+    prov_mac="${PROV_MACS[$(( NUM_MASTERS + i ))]}"
+    HOSTS_YAML+="    - name: worker-${i}
+      role: worker
+      bmc:
+        address: ipmi://${PROV_BRIDGE_IP}:${vbmc_port}
+        username: ${VBMC_USER}
+        password: ${VBMC_PASS}
+      bootMACAddress: ${prov_mac}
+      rootDeviceHints:
+        deviceName: /dev/vda
+"
+done
 
 cat > install-config.yaml <<_INSTALL_CONFIG_
 apiVersion: v1
@@ -491,7 +596,7 @@ networking:
   - cidr: 192.168.122.0/24
 compute:
 - name: worker
-  replicas: 0
+  replicas: ${NUM_WORKERS}
 controlPlane:
   name: master
   replicas: ${NUM_MASTERS}
@@ -557,7 +662,7 @@ CONSOLE="console-openshift-console.apps.${CLUSTER_NAME}.${BASE_DOMAIN}"
 echo ""
 echo "==========================================="
 echo "  IPI Cluster ${CLUSTER_NAME} (OCP ${VERSION}) is ready!"
-echo "  Type:       Compact 3-node (IPI Baremetal)"
+echo "  Type:       ${NUM_MASTERS} masters + ${NUM_WORKERS} workers (IPI Baremetal)"
 echo "  Console:    https://$CONSOLE"
 echo "  Username:   kubeadmin"
 echo "  Password:   $KUBE_PASS"

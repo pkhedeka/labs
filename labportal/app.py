@@ -664,9 +664,6 @@ def create_linux_user(username, first_name, last_name):
     if proc.returncode != 0:
         errors.append(f"chpasswd failed: {proc.stderr.strip()}")
 
-    # Force password change on first login
-    subprocess.run(["chage", "-d", "0", username],
-                   capture_output=True, timeout=5)
     # Password expires after 180 days
     subprocess.run(["chage", "-M", "180", username],
                    capture_output=True, timeout=5)
@@ -1121,33 +1118,36 @@ def cluster_delete():
         vm_prefix = f"vm-{cluster_name}"
         mac_base = f"{dep_ip_offset:02x}"
         num_masters = 3
+        num_workers = 2
         vbmc_port_base = 6200 + dep_ip_offset - 100
 
-        # Stop/delete VBMC entries
-        for i in range(num_masters):
-            vm_name = f"{vm_prefix}-master-{i}"
-            try:
-                subprocess.run(["vbmc", "stop", vm_name],
-                               capture_output=True, timeout=10)
-            except Exception:
-                pass
-            try:
-                subprocess.run(["vbmc", "delete", vm_name],
-                               capture_output=True, timeout=10)
-            except Exception:
-                pass
+        # Stop/delete VBMC entries (masters + workers)
+        for role, count, port_offset in [("master", num_masters, 0), ("worker", num_workers, num_masters)]:
+            for i in range(count):
+                vm_name = f"{vm_prefix}-{role}-{i}"
+                try:
+                    subprocess.run(["vbmc", "stop", vm_name],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
+                try:
+                    subprocess.run(["vbmc", "delete", vm_name],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
 
-        # Remove DHCP reservations
-        for i in range(num_masters):
-            bm_mac = f"52:54:00:{mac_base}:01:{0x11 + i:02x}"
-            try:
-                subprocess.run(
-                    ["virsh", "net-update", "default", "delete", "ip-dhcp-host",
-                     f"<host mac='{bm_mac}'/>", "--live", "--config"],
-                    capture_output=True, timeout=10
-                )
-            except Exception:
-                pass
+        # Remove DHCP reservations (masters: 0x11+i, workers: 0x21+i)
+        for base_byte, count in [(0x11, num_masters), (0x21, num_workers)]:
+            for i in range(count):
+                bm_mac = f"52:54:00:{mac_base}:01:{base_byte + i:02x}"
+                try:
+                    subprocess.run(
+                        ["virsh", "net-update", "default", "delete", "ip-dhcp-host",
+                         f"<host mac='{bm_mac}'/>", "--live", "--config"],
+                        capture_output=True, timeout=10
+                    )
+                except Exception:
+                    pass
 
         # Remove DNS blocks from IPI include files
         fwd_zone = "/var/named/ipi-forward.include"
