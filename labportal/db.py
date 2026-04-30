@@ -13,18 +13,6 @@ def get_db():
 def init_db():
     conn = get_db()
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS access_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            first_name TEXT NOT NULL,
-            last_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            reason TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            resolved_at TIMESTAMP,
-            admin_note TEXT
-        );
-
         CREATE TABLE IF NOT EXISTS admin_config (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -81,21 +69,6 @@ def init_db():
     """)
 
     # Migrations for existing databases
-    try:
-        conn.execute("SELECT first_name FROM access_requests LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE access_requests ADD COLUMN first_name TEXT NOT NULL DEFAULT ''")
-        conn.execute("ALTER TABLE access_requests ADD COLUMN last_name TEXT NOT NULL DEFAULT ''")
-        # Migrate: split existing 'name' into first/last
-        rows = conn.execute("SELECT id, name FROM access_requests").fetchall()
-        for row in rows:
-            parts = row["name"].split(None, 1)
-            first = parts[0] if parts else row["name"]
-            last = parts[1] if len(parts) > 1 else ""
-            conn.execute("UPDATE access_requests SET first_name=?, last_name=? WHERE id=?",
-                         (first, last, row["id"]))
-        conn.commit()
-
     try:
         conn.execute("SELECT first_name FROM users LIMIT 1")
     except sqlite3.OperationalError:

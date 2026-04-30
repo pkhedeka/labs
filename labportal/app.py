@@ -29,8 +29,7 @@ from flask_socketio import SocketIO, emit, disconnect
 
 import config
 from db import get_db, init_db
-from mail import (send_admin_notification, send_user_approved, send_user_denied,
-                 send_password_reset_notification, send_reset_token_email)
+from mail import (send_password_reset_notification, send_reset_token_email)
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -459,88 +458,16 @@ def api_status():
 def index():
     if session.get("user_email"):
         return redirect(url_for("user_dashboard"))
-    conn = get_db()
-    stats = {
-        "total": conn.execute("SELECT COUNT(*) FROM access_requests").fetchone()[0],
-        "pending": conn.execute(
-            "SELECT COUNT(*) FROM access_requests WHERE status='pending'"
-        ).fetchone()[0],
-    }
-    conn.close()
     vms, clusters, resources = get_lab_status()
     cluster_versions = get_cluster_versions(clusters)
     ssh_user = ""
     if session.get("user_email"):
         ssh_user = derive_linux_username(session["user_email"])
-    return render_template("index.html", stats=stats,
+    return render_template("index.html",
                            vms=vms, clusters=clusters, resources=resources,
                            ssh_user=ssh_user, base_domain=config.base_domain(),
                            cluster_versions=cluster_versions)
 
-
-@app.route("/request", methods=["GET", "POST"])
-@setup_required
-def request_access():
-    if request.method == "POST":
-        first_name = request.form.get("first_name", "").strip()
-        last_name = request.form.get("last_name", "").strip()
-        email = request.form.get("email", "").strip()
-        reason = request.form.get("reason", "").strip()
-
-        errors = []
-        if not first_name or len(first_name) < 2:
-            errors.append("First name is required (at least 2 characters).")
-        if not last_name:
-            errors.append("Last name is required.")
-        if not reason or len(reason) < 10:
-            errors.append("Please provide a comment (at least 10 characters).")
-
-        valid, result = validate_email(email)
-        if not valid:
-            errors.append(result)
-        else:
-            email = result
-
-        if errors:
-            return render_template("request_form.html", errors=errors,
-                                   first_name=first_name, last_name=last_name,
-                                   email=email, reason=reason)
-
-        # Spam protection — one request per email per 24 hours
-        conn = get_db()
-        recent = conn.execute(
-            "SELECT id FROM access_requests WHERE email=? AND created_at > datetime('now', '-24 hours')",
-            (email,)
-        ).fetchone()
-        if recent:
-            conn.close()
-            flash("You can only submit one request per 24 hours. Please try again later.", "warning")
-            return redirect(url_for("request_access"))
-
-        # Check for duplicate pending requests
-        existing = conn.execute(
-            "SELECT id FROM access_requests WHERE email=? AND status='pending'",
-            (email,)
-        ).fetchone()
-        if existing:
-            conn.close()
-            flash("You already have a pending request. Please wait for it to be reviewed.", "warning")
-            return redirect(url_for("request_access"))
-
-        conn.execute(
-            "INSERT INTO access_requests (first_name, last_name, email, reason) VALUES (?, ?, ?, ?)",
-            (first_name, last_name, email, reason)
-        )
-        conn.commit()
-        conn.close()
-
-        full_name = f"{first_name} {last_name}"
-        send_admin_notification(full_name, email, reason)
-        flash("Your request has been submitted. You'll receive an email once it's reviewed.", "success")
-        return redirect(url_for("index"))
-
-    return render_template("request_form.html", errors=[],
-                           first_name="", last_name="", email="", reason="")
 
 
 @app.route("/login")
@@ -556,20 +483,10 @@ def logout():
 @app.route("/admin")
 @login_required
 def admin_panel():
-    status_filter = request.args.get("status", "pending")
     conn = get_db()
-    if status_filter == "all":
-        rows = conn.execute(
-            "SELECT * FROM access_requests ORDER BY created_at DESC"
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM access_requests WHERE status=? ORDER BY created_at DESC",
-            (status_filter,)
-        ).fetchall()
     users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
     conn.close()
-    return render_template("admin.html", requests=rows, status_filter=status_filter, users=users)
+    return render_template("admin.html", users=users)
 
 
 @app.route("/admin/activity")
@@ -719,76 +636,6 @@ def create_linux_user(username, first_name, last_name):
     return True, temp_password
 
 
-@app.route("/admin/action/<int:req_id>", methods=["POST"])
-@login_required
-def admin_action(req_id):
-    action = request.form.get("action")
-    note = request.form.get("note", "").strip()
-
-    if action not in ("approve", "deny"):
-        abort(400)
-
-    conn = get_db()
-    row = conn.execute("SELECT * FROM access_requests WHERE id=?", (req_id,)).fetchone()
-    if not row:
-        conn.close()
-        abort(404)
-
-    new_status = "approved" if action == "approve" else "denied"
-    conn.execute(
-        "UPDATE access_requests SET status=?, resolved_at=?, admin_note=? WHERE id=?",
-        (new_status, datetime.utcnow().isoformat(), note, req_id)
-    )
-    conn.commit()
-    conn.close()
-
-    full_name = f"{row['first_name']} {row['last_name']}"
-
-    if action == "approve":
-        password = generate_password()
-        pw_hash = hash_password(password)
-        linux_user = derive_linux_username(row["email"])
-
-        conn2 = get_db()
-        existing_user = conn2.execute(
-            "SELECT id FROM users WHERE email=?", (row["email"],)
-        ).fetchone()
-        if existing_user:
-            conn2.execute(
-                "UPDATE users SET password_hash=?, is_active=1 WHERE email=?",
-                (pw_hash, row["email"])
-            )
-        else:
-            conn2.execute(
-                "INSERT INTO users (email, first_name, last_name, linux_username, password_hash) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (row["email"], row["first_name"], row["last_name"], linux_user, pw_hash)
-            )
-        conn2.commit()
-        conn2.close()
-
-        # Create Linux system account
-        success, linux_result = create_linux_user(linux_user, row["first_name"], row["last_name"])
-        if success and linux_result != f"Linux user '{linux_user}' already exists":
-            # linux_result is the temp password
-            temp_pw = linux_result
-            send_user_approved(row["email"], full_name, note,
-                               password=password, linux_username=linux_user,
-                               linux_password=temp_pw)
-            flash(f"Approved {full_name}. Portal + Linux account ({linux_user}) created.", "success")
-        elif success:
-            send_user_approved(row["email"], full_name, note, password=password,
-                               linux_username=linux_user)
-            flash(f"Approved {full_name}. Portal account created. Linux user '{linux_user}' already existed.", "success")
-        else:
-            send_user_approved(row["email"], full_name, note, password=password)
-            flash(f"Approved {full_name}. Portal account created but Linux user creation failed: {linux_result}", "warning")
-    else:
-        send_user_denied(row["email"], full_name, note)
-        flash(f"Denied request from {full_name}. Notification sent.", "info")
-
-    log_activity(f"user_{action}", f"{full_name} ({row['email']})")
-    return redirect(url_for("admin_panel"))
 
 
 # --- User Auth ---
