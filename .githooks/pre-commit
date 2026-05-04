@@ -1,0 +1,45 @@
+#!/bin/bash
+# Pre-commit hook: validate shell and Python files before committing.
+# Enable with: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+errors=0
+
+# Collect staged files
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+# --- Shell scripts: syntax check + shellcheck ---
+sh_files=$(echo "$staged" | grep '\.sh$' || true)
+if [ -n "$sh_files" ]; then
+    for f in $sh_files; do
+        if ! bash -n "$f" 2>/dev/null; then
+            echo "FAIL: bash syntax error in $f"
+            errors=1
+        fi
+    done
+    if command -v shellcheck &>/dev/null; then
+        for f in $sh_files; do
+            if ! shellcheck -S warning "$f"; then
+                errors=1
+            fi
+        done
+    fi
+fi
+
+# --- Python files: syntax check ---
+py_files=$(echo "$staged" | grep '\.py$' || true)
+if [ -n "$py_files" ]; then
+    for f in $py_files; do
+        if ! python3 -m py_compile "$f" 2>/dev/null; then
+            echo "FAIL: Python syntax error in $f"
+            errors=1
+        fi
+    done
+fi
+
+if [ "$errors" -ne 0 ]; then
+    echo ""
+    echo "Pre-commit checks failed. Fix the issues above before committing."
+    exit 1
+fi
