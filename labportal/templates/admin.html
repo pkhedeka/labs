@@ -2,62 +2,85 @@
 {% block title %}Admin Panel{% endblock %}
 {% block content %}
 
-<!-- Users Management -->
-{% if users %}
-<div style="margin-top: 2rem;">
-    <div class="pf-v5-c-content" style="margin-bottom: 1rem;">
-        <h1>Users</h1>
+<div class="admin-stats" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+    <div class="resource-tile">
+        <div class="resource-big-num">{{ users|length }}</div>
+        <span class="resource-label">Total Users</span>
+        <span class="resource-sub">{{ users|selectattr('is_active')|list|length }} active</span>
     </div>
-    <table class="pf-v5-c-table pf-m-grid-md" role="grid">
-        <thead class="pf-v5-c-table__thead">
-            <tr class="pf-v5-c-table__tr" role="row">
-                <th class="pf-v5-c-table__th">Name</th>
-                <th class="pf-v5-c-table__th">Email</th>
-                <th class="pf-v5-c-table__th">SSH Login</th>
-                <th class="pf-v5-c-table__th">Role</th>
-                <th class="pf-v5-c-table__th">Status</th>
-                <th class="pf-v5-c-table__th">Created</th>
-                <th class="pf-v5-c-table__th">Actions</th>
-            </tr>
-        </thead>
-        <tbody class="pf-v5-c-table__tbody">
-            {% for user in users %}
-            <tr class="pf-v5-c-table__tr">
-                <td class="pf-v5-c-table__td">{{ user.first_name }} {{ user.last_name }}</td>
-                <td class="pf-v5-c-table__td">{{ user.email }}</td>
-                <td class="pf-v5-c-table__td"><code>{{ user.linux_username or '—' }}</code></td>
-                <td class="pf-v5-c-table__td">
-                    {% if user.is_admin %}
-                    <span class="cluster-badge badge-ok" style="font-size: 0.7rem;">admin</span>
-                    {% else %}
-                    <span class="stat-pill" style="font-size: 0.7rem;">user</span>
-                    {% endif %}
-                </td>
-                <td class="pf-v5-c-table__td">
-                    {% if user.is_active %}
-                    <span class="pf-v5-c-label pf-m-green"><span class="pf-v5-c-label__content">Active</span></span>
-                    {% else %}
-                    <span class="pf-v5-c-label pf-m-red"><span class="pf-v5-c-label__content">Disabled</span></span>
-                    {% endif %}
-                </td>
-                <td class="pf-v5-c-table__td" style="font-size: 0.85rem;">{{ user.created_at }}</td>
-                <td class="pf-v5-c-table__td" style="display: flex; gap: 0.5rem;">
-                    <form method="post" action="{{ url_for('admin_toggle_user', user_id=user.id) }}">
-                        {% if user.is_active %}
-                        <button type="submit" class="pf-v5-c-button pf-m-danger pf-m-small">Disable</button>
+    <div class="resource-tile">
+        <div class="resource-big-num">{{ users|selectattr('is_admin')|list|length }}</div>
+        <span class="resource-label">Admins</span>
+    </div>
+    <div class="resource-tile" style="cursor: pointer;" onclick="location.href='{{ url_for('admin_activity') }}'">
+        <div class="resource-big-num" style="font-size: 1.5rem;">&#9776;</div>
+        <span class="resource-label">Activity Log</span>
+        <span class="resource-sub">view events</span>
+    </div>
+</div>
+
+{% if users %}
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2>User Management</h2>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <span class="stat-pill">{{ users|length }} users</span>
+        </div>
+    </div>
+    <div class="dash-card-body" style="padding: 0; overflow-x: auto;">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>SSH Login</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td class="admin-cell-name">{{ user.first_name }} {{ user.last_name }}</td>
+                    <td><code style="color: #73bcf7; font-size: 0.85rem;">{{ user.email }}</code></td>
+                    <td><code style="color: #8a8d90; font-size: 0.85rem;">{{ user.linux_username or '—' }}</code></td>
+                    <td>
+                        {% if user.is_admin %}
+                        <span class="admin-role-badge admin-role-admin">admin</span>
                         {% else %}
-                        <button type="submit" class="pf-v5-c-button pf-m-primary pf-m-small">Enable</button>
+                        <span class="admin-role-badge admin-role-user">user</span>
                         {% endif %}
-                    </form>
-                    <form method="post" action="{{ url_for('admin_reset_password', user_id=user.id) }}"
-                          onsubmit="return confirm('Reset password for {{ user.email }}? New credentials will be emailed.')">
-                        <button type="submit" class="pf-v5-c-button pf-m-warning pf-m-small">Reset Password</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                    </td>
+                    <td>
+                        {% if user.is_active %}
+                        <span class="admin-status-badge admin-status-active">Active</span>
+                        {% else %}
+                        <span class="admin-status-badge admin-status-disabled">Disabled</span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size: 0.8rem; color: #8a8d90; white-space: nowrap;">{{ user.created_at[:16] if user.created_at else '—' }}</td>
+                    <td>
+                        <div style="display: flex; gap: 0.4rem;">
+                            <form method="post" action="{{ url_for('admin_toggle_user', user_id=user.id) }}">
+                                {% if user.is_active %}
+                                <button type="submit" class="admin-action-btn admin-btn-disable">Disable</button>
+                                {% else %}
+                                <button type="submit" class="admin-action-btn admin-btn-enable">Enable</button>
+                                {% endif %}
+                            </form>
+                            <form method="post" action="{{ url_for('admin_reset_password', user_id=user.id) }}"
+                                  onsubmit="return confirm('Reset password for {{ user.email }}? New credentials will be emailed.')">
+                                <button type="submit" class="admin-action-btn admin-btn-reset">Reset PW</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 {% endif %}
 {% endblock %}
