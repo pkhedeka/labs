@@ -1,0 +1,15 @@
+[Unit]
+Description=OCP Lab Portal
+After=network.target libvirtd.service
+Wants=libvirtd.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/labs/labportal
+ExecStart=/usr/bin/python3 /root/labs/labportal/app.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

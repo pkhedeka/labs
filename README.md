@@ -1,6 +1,6 @@
 # OCP Lab
 
-[![License](https://img.shields.io/badge/license-Internal-red)](.)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![OpenShift](https://img.shields.io/badge/OpenShift-4.x-ee0000?logo=redhatopenshift&logoColor=white)](https://docs.openshift.com)
 [![Platform](https://img.shields.io/badge/platform-KVM%2Flibvirt-blue)](.)
 [![Python](https://img.shields.io/badge/python-3.x-3776AB?logo=python&logoColor=white)](.)
@@ -101,6 +101,7 @@ labs/
 │   ├── db.py                 # SQLite schema (users, requests, deployments, activity)
 │   ├── mail.py               # SMTP email notifications
 │   ├── requirements.txt      # Python dependencies (flask, flask-socketio)
+│   ├── labportal.service     # systemd unit file for production deployment
 │   ├── static/
 │   │   └── style.css         # PatternFly 5 dark theme overrides
 │   └── templates/
@@ -137,13 +138,15 @@ All IPs on `192.168.122.0/24` (libvirt default network). API/apps traffic routes
 
 ### IPI (Installer Provisioned Infrastructure — Baremetal)
 
-Dynamic slot allocation — user provides a cluster name, the portal auto-assigns an IP offset from the `140–190` range (blocks of 10). Compact 3-node clusters (masters only, schedulable).
+Dynamic slot allocation — user provides a cluster name, the portal auto-assigns an IP offset from the `140–190` range (blocks of 10).
 
 | Component | Details |
 |-----------|---------|
-| Masters | 3 VMs, 8 vCPUs, 32G RAM each (24 vCPUs, 96G total) |
+| Masters | 3 VMs, 8 vCPUs, 32G RAM each |
+| Workers | 2 VMs, 4 vCPUs, 16G RAM each |
 | VIPs | API VIP = `.offset`, Ingress VIP = `.offset+1` (managed by keepalived on nodes) |
 | Master IPs | `.offset+2` through `.offset+4` |
+| Worker IPs | `.offset+5` through `.offset+6` |
 | Provisioning | PXE boot via ironic over `provisioning` network (`192.168.0.0/24`) |
 | BMC | VirtualBMC (VBMC) exposes VMs as IPMI endpoints for the installer |
 | DNS | Dynamic records in include files (`/var/named/ipi-forward.include`, `ipi-reverse.include`) |
@@ -164,9 +167,29 @@ Dynamic slot allocation — user provides a cluster name, the portal auto-assign
 | Apache httpd + mod_proxy_wstunnel | Reverse proxy (HTTP + WebSocket) | `dnf install -y httpd mod_proxy_html` |
 
 **Additionally required:**
-- OpenShift pull secret at `/root/pull-secret.txt` ([Get one here](https://console.redhat.com/openshift/install/pull-secret))
-- SSH public key at `~/.ssh/id_ed25519.pub`
-- For IPI: `provisioning` libvirt network (`192.168.0.0/24`) and `vbmcd` service running
+- OpenShift pull secret ([Get one here](https://console.redhat.com/openshift/install/pull-secret)) — default location: `/root/pull-secret.txt`, override with `PULL_SECRET_FILE` env var
+- SSH public key — default: `~/.ssh/id_ed25519.pub`, override with `SSH_KEY_FILE` env var
+- For IPI: `provisioning` libvirt network and `vbmcd` service (see below)
+
+**IPI provisioning network setup:**
+
+```bash
+# Create the provisioning network for IPI baremetal PXE boot
+cat > /tmp/provisioning-net.xml <<EOF
+<network>
+  <name>provisioning</name>
+  <bridge name='provisioning' stp='on' delay='0'/>
+  <ip address='192.168.0.1' netmask='255.255.255.0'/>
+</network>
+EOF
+virsh net-define /tmp/provisioning-net.xml
+virsh net-start provisioning
+virsh net-autostart provisioning
+
+# Start VirtualBMC daemon
+pip install virtualbmc
+vbmcd
+```
 
 ## Setup
 
@@ -195,13 +218,24 @@ pip install -r requirements.txt
 
 # Run directly (development)
 python3 app.py
-# First run: visit /labs/setup in browser to create admin account
+# First run: visit http://localhost:5000/labs/setup to create admin account
 
 # Or via systemd (production)
+sudo cp labportal.service /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl enable --now labportal
 ```
 
 ### 3. Apache Reverse Proxy
+
+Generate a self-signed certificate (or use your own):
+
+```bash
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/pki/tls/private/labportal.key \
+    -out /etc/pki/tls/certs/labportal.crt \
+    -subj "/CN=$(hostname)"
+```
 
 ```apache
 # /etc/httpd/conf.d/labportal.conf
@@ -240,9 +274,11 @@ All settings via environment variables (or defaults in `config.py`):
 | `LABPORTAL_SMTP_PORT` | `25` | SMTP port |
 | `LABPORTAL_ADMIN_EMAIL` | `admin@example.com` | Admin notification email |
 | `LABPORTAL_FROM_EMAIL` | `labportal@lab.example.com` | Sender address |
-| `LABPORTAL_DEPLOY_SCRIPT` | `/root/labs/ocp-upi-deploy.sh` | Path to UPI deploy script |
-| `LABPORTAL_UPI_SCRIPT` | `/root/labs/ocp-upi-deploy.sh` | UPI deploy script |
-| `LABPORTAL_IPI_SCRIPT` | `/root/labs/ocp-ipi-deploy.sh` | IPI deploy script |
+| `LABPORTAL_UPI_SCRIPT` | `/root/labs/ocp-upi-deploy.sh` | Path to UPI deploy script |
+| `LABPORTAL_IPI_SCRIPT` | `/root/labs/ocp-ipi-deploy.sh` | Path to IPI deploy script |
+| `CLUSTERS_DIR` | `/kvm/clusters` | Directory where cluster artifacts are stored |
+| `PULL_SECRET_FILE` | `/root/pull-secret.txt` | Path to OpenShift pull secret |
+| `SSH_KEY_FILE` | `~/.ssh/id_ed25519.pub` | Path to SSH public key |
 
 ## Security
 
@@ -263,7 +299,7 @@ The host runs with SELinux **enforcing** at all times. Firewall ports are opened
 ### Deploy a Cluster
 
 1. Log in to the portal
-2. Select an install type (UPI or IPI Compact)
+2. Select an install type (UPI or IPI)
 3. For UPI: select an available cluster slot; for IPI: enter a cluster name
 4. Enter the OCP version (e.g., `4.20.5`) — version is validated against the OCP mirror
 5. Click **Deploy Cluster** — resource availability is checked before launching
@@ -275,7 +311,7 @@ The host runs with SELinux **enforcing** at all times. Firewall ports are opened
 # UPI: Deploy OCP 4.20.5 in slot upi1 (IP offset 110)
 sudo ./ocp-upi-deploy.sh 4.20.5 upi1 110
 
-# IPI: Deploy compact 3-node cluster (IP offset 140)
+# IPI: Deploy cluster with 3 masters + 2 workers (IP offset 140)
 sudo ./ocp-ipi-deploy.sh 4.20.5 ipi1 140
 ```
 
@@ -299,7 +335,7 @@ Click **Delete Cluster** in the portal dashboard. This will:
 | **Access Requests** | Email domain validation, spam protection (1 request / 24h) |
 | **User Accounts** | Created on admin approval, credentials emailed, enable/disable toggle |
 | **Password Reset** | Self-service forgot password flow via email token |
-| **Install Types** | UPI (fixed slots, HAProxy) and IPI Compact (dynamic names, VBMC/ironic, keepalived) |
+| **Install Types** | UPI (fixed slots, HAProxy) and IPI baremetal (dynamic names, VBMC/ironic, keepalived) |
 | **Resource Check** | Validates CPU/RAM availability before deploying; blocks if insufficient |
 | **Version Validation** | Checks OCP version exists on the mirror before starting deployment |
 | **Cluster Deploy** | One-click deploy with install type picker, detached process |
@@ -322,13 +358,14 @@ Click **Delete Cluster** in the portal dashboard. This will:
 
 Bootstrap VM is automatically destroyed after bootstrap-complete to reclaim resources.
 
-### IPI Compact Clusters
+### IPI Clusters
 
 | Role | Count | RAM | vCPUs | Disk | VM Name |
 |------|-------|-----|-------|------|---------|
 | Master | 3 | 32 GB | 8 | 120 GB | `vm-<name>-master-{0,1,2}` |
+| Worker | 2 | 16 GB | 4 | 120 GB | `vm-<name>-worker-{0,1}` |
 
-Compact 3-node (masters only, schedulable). Bootstrap VM is created and destroyed automatically by `openshift-install`.
+Bootstrap VM is created and destroyed automatically by `openshift-install`.
 
 ## HAProxy Routing
 
@@ -343,4 +380,4 @@ Traffic routing uses SNI inspection (TLS) and Host headers (HTTP) — no VIPs re
 
 ## License
 
-Internal tooling.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
