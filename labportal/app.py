@@ -424,6 +424,14 @@ def setup():
         config.reload_site_config()
         generate_infra_config()
 
+        conn = get_db()
+        conn.execute(
+            "INSERT OR IGNORE INTO users (email, first_name, last_name, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, 1, 1)",
+            (admin_email_addr, admin_username, "", hash_password(admin_password))
+        )
+        conn.commit()
+        conn.close()
+
         flash("Setup complete! You can now log in as admin.", "success")
         return redirect(url_for("login"))
 
