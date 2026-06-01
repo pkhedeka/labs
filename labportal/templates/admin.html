@@ -2,6 +2,24 @@
 {% block title %}Admin Panel{% endblock %}
 {% block content %}
 
+<div class="dash-card" style="margin-bottom: 1.5rem;">
+    <div class="dash-card-header">
+        <h2>Maintenance Banner</h2>
+    </div>
+    <div class="dash-card-body" style="display: flex; gap: 0.5rem; align-items: center;">
+        <form method="post" action="{{ url_for('admin_set_maintenance') }}" style="display: flex; gap: 0.5rem; flex: 1; align-items: center;">
+            <input class="pf-v5-c-form-control" type="text" name="message" placeholder="Maintenance message (leave empty to clear)" value="{{ maintenance_message }}" style="flex: 1;">
+            <button type="submit" class="pf-v5-c-button pf-m-primary pf-m-small">Set</button>
+        </form>
+        {% if maintenance_message %}
+        <form method="post" action="{{ url_for('admin_set_maintenance') }}">
+            <input type="hidden" name="message" value="">
+            <button type="submit" class="admin-action-btn admin-btn-disable">Clear</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
 <div class="admin-stats" style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
     <div class="resource-tile">
         <div class="resource-big-num">{{ users|length }}</div>

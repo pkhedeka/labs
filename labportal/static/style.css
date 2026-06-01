@@ -756,5 +756,24 @@ body.pf-v5-c-page {
     color: #ffc71f;
 }
 
+/* Maintenance banner */
+.maintenance-banner {
+    background: rgba(240, 171, 0, 0.12);
+    border: 1px solid #f0ab00;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    color: #f0ab00;
+    font-weight: 600;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.maintenance-icon {
+    font-size: 1.2rem;
+}
+
 /* Bullseye layout */
 .pf-v5-l-bullseye { min-height: auto; }

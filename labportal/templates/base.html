@@ -43,6 +43,13 @@
 
     <main class="pf-v5-c-page__main">
         <section class="pf-v5-c-page__main-section">
+            {% if maintenance_message %}
+            <div class="maintenance-banner">
+                <span class="maintenance-icon">&#9888;</span>
+                <span>{{ maintenance_message }}</span>
+            </div>
+            {% endif %}
+
             {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
             <div class="toast-container" id="toast-container">

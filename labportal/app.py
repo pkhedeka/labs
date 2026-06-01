@@ -3,12 +3,14 @@
 Lab Portal — lightweight web app for managing OCP lab access requests.
 """
 import fcntl
+import glob
 import hashlib
 import json
 import os
 import pty
 import re
 import secrets
+import shutil
 import urllib.request
 import urllib.error
 import select
@@ -37,8 +39,10 @@ app.secret_key = config.SECRET_KEY
 
 @app.context_processor
 def inject_globals():
-    """Make hostname available in all templates."""
-    return {"hostname": config.lab_hostname()}
+    return {
+        "hostname": config.lab_hostname(),
+        "maintenance_message": config.get_site("maintenance_message") or "",
+    }
 
 
 class PrefixMiddleware:
@@ -482,6 +486,21 @@ def index():
                            ssh_user=ssh_user, base_domain=config.base_domain(),
                            cluster_versions=cluster_versions)
 
+
+
+@app.route("/admin/maintenance", methods=["POST"])
+@login_required
+def admin_set_maintenance():
+    msg = request.form.get("message", "").strip()
+    if msg:
+        config.set_site("maintenance_message", msg)
+    else:
+        conn = get_db()
+        conn.execute("DELETE FROM admin_config WHERE key='maintenance_message'")
+        conn.commit()
+        conn.close()
+        config._site_cache.pop("maintenance_message", None)
+    return redirect(url_for("admin_panel"))
 
 
 @app.route("/login")
@@ -1062,6 +1081,30 @@ def cluster_delete():
                 except Exception as e:
                     errors.append(f"DNS cleanup {zone_file}: {e}")
 
+        # Clean up libvirt storage pools created by IPI installer
+        try:
+            result = subprocess.run(["virsh", "pool-list", "--all", "--name"],
+                                    capture_output=True, text=True, timeout=10)
+            for pool_name in result.stdout.strip().splitlines():
+                pool_name = pool_name.strip()
+                if not pool_name or pool_name in ("default", "images"):
+                    continue
+                if cluster_name in pool_name:
+                    subprocess.run(["virsh", "pool-destroy", pool_name],
+                                   capture_output=True, timeout=10)
+                    subprocess.run(["virsh", "pool-undefine", pool_name],
+                                   capture_output=True, timeout=10)
+        except Exception as e:
+            errors.append(f"pool cleanup: {e}")
+
+        # Clean up bootstrap images from /kvm/libvirt-images (symlinked from /var/lib/libvirt/openshift-images)
+        for img_dir in glob.glob(f"/kvm/libvirt-images/{cluster_name}-*"):
+            if os.path.isdir(img_dir):
+                try:
+                    shutil.rmtree(img_dir)
+                except Exception as e:
+                    errors.append(f"bootstrap image cleanup: {e}")
+
         # Reload named to pick up zone changes
         try:
             subprocess.run(["systemctl", "reload", "named"],
@@ -1086,7 +1129,6 @@ def cluster_delete():
 
     # Clean up cluster directories under /kvm/clusters/<name>-*
     # (master ISOs in /kvm/client_tools/ are preserved)
-    import glob, shutil
     for cluster_dir in glob.glob(f"/kvm/clusters/{cluster_name}-*"):
         if os.path.isdir(cluster_dir):
             try:
