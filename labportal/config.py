@@ -134,20 +134,8 @@ def cluster_slots():
     except (json.JSONDecodeError, ValueError):
         return {}
 
-def smtp_host():
-    return get_site("smtp_host", "localhost")
-
-def smtp_port():
-    try:
-        return int(get_site("smtp_port", "25"))
-    except ValueError:
-        return 25
-
 def admin_email():
     return get_site("admin_email", "")
-
-def from_email():
-    return get_site("from_email", "")
 
 def lab_hostname():
     return get_site("lab_hostname", "lab.local")
