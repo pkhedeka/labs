@@ -21,6 +21,7 @@ fi
 
 # Base domain — from env, /etc/ocp-lab.conf, or default
 BASE_DOMAIN="${BASE_DOMAIN:-example.com}"
+STORAGE_DIR="${STORAGE_DIR:-/kvm}"
 
 VERSION="${1:-}"
 CLUSTER_NAME="${2:-upi}"
@@ -32,8 +33,8 @@ if [ -z "$VERSION" ]; then
 fi
 
 # Use Absolute Paths to prevent path resolution errors
-BASE_DIR="/kvm/client_tools/$VERSION"
-INSTALL_DIR="/kvm/clusters/${CLUSTER_NAME}-${VERSION}"
+BASE_DIR="$STORAGE_DIR/client_tools/$VERSION"
+INSTALL_DIR="$STORAGE_DIR/clusters/${CLUSTER_NAME}-${VERSION}"
 MIRROR_URL="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/$VERSION"
 
 # Networking — each cluster gets a unique IP block based on cluster name hash

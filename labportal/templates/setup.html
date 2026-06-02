@@ -121,6 +121,23 @@
             </div>
         </div>
 
+        <!-- Storage -->
+        <div class="dash-card">
+            <div class="dash-card-header">
+                <h2>Storage</h2>
+            </div>
+            <div class="dash-card-body">
+                <div class="pf-v5-c-form__group">
+                    <label class="pf-v5-c-form__label" for="storage_dir">
+                        <span class="pf-v5-c-form__label-text">Storage Directory</span>
+                    </label>
+                    <input class="pf-v5-c-form-control" type="text" id="storage_dir" name="storage_dir"
+                           value="{{ storage_dir }}" placeholder="/kvm" required>
+                    <span class="pf-v5-c-helper-text__item-text">Base directory for clusters, tools, and VM images. Must exist and have at least 500 GB free. Subdirectories (clusters/, client_tools/, kvm_images/) will be created automatically.</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Cluster Slots -->
         <div class="dash-card">
             <div class="dash-card-header">
