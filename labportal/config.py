@@ -151,3 +151,6 @@ def from_email():
 
 def lab_hostname():
     return get_site("lab_hostname", "lab.local")
+
+def storage_dir():
+    return get_site("storage_dir", "/kvm")

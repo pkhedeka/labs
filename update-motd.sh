@@ -6,7 +6,6 @@
 # Can also be run manually: ./update-motd.sh
 # =============================================================================
 
-CLUSTERS_DIR="/kvm/clusters"
 MOTD_FILE="/etc/motd"
 RESERVATION_FILE="/var/run/cluster-reservations.json"
 
@@ -16,6 +15,8 @@ if [ -f /etc/ocp-lab.conf ]; then
     source /etc/ocp-lab.conf
 fi
 BASE_DOMAIN="${BASE_DOMAIN:-example.com}"
+STORAGE_DIR="${STORAGE_DIR:-/kvm}"
+CLUSTERS_DIR="$STORAGE_DIR/clusters"
 
 # Collect active clusters by checking for kubeconfig files
 declare -a ACTIVE_CLUSTERS=()

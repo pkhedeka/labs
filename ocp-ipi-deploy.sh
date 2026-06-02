@@ -30,6 +30,7 @@ if [ -f /etc/ocp-lab.conf ]; then
 fi
 
 BASE_DOMAIN="${BASE_DOMAIN:-example.com}"
+STORAGE_DIR="${STORAGE_DIR:-/kvm}"
 
 VERSION="${1:-}"
 CLUSTER_NAME="${2:-ipi1}"
@@ -44,8 +45,8 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-BASE_DIR="/kvm/client_tools/$VERSION"
-INSTALL_DIR="/kvm/clusters/${CLUSTER_NAME}-${VERSION}"
+BASE_DIR="$STORAGE_DIR/client_tools/$VERSION"
+INSTALL_DIR="$STORAGE_DIR/clusters/${CLUSTER_NAME}-${VERSION}"
 MIRROR_URL="https://mirror.openshift.com/pub/openshift-v4/clients/ocp/$VERSION"
 
 # Networking
