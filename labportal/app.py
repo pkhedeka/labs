@@ -10,17 +10,19 @@ import os
 import pty
 import re
 import secrets
-import shutil
-import sqlite3
-import urllib.request
-import urllib.error
 import select
+import shutil
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
 import termios
 import threading
+import time
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
 from datetime import datetime
 from functools import wraps
 
@@ -32,7 +34,6 @@ from flask_socketio import SocketIO, emit, disconnect
 
 import config
 from db import get_db, init_db
-from mail import (send_password_reset_notification, send_reset_token_email)
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -113,22 +114,21 @@ def validate_email(email):
     return True, email
 
 
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get("admin"):
-            return redirect(url_for("user_login"))
-        return f(*args, **kwargs)
-    return decorated
-
-
-def user_login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get("user_email"):
-            return redirect(url_for("user_login"))
-        return f(*args, **kwargs)
-    return decorated
+def login_required(admin_only=False):
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not session.get("user_email"):
+                return redirect(url_for("user_login"))
+            if admin_only and not session.get("admin"):
+                abort(403)
+            return f(*args, **kwargs)
+        return decorated
+    if callable(admin_only):
+        fn = admin_only
+        admin_only = False
+        return decorator(fn)
+    return decorator
 
 
 def log_activity(event, details=None):
@@ -208,8 +208,6 @@ def _write_reservation_file():
 
 
 def get_cluster_versions(clusters):
-    """Get OCP version per cluster — DB first, then fall back to /kvm/clusters/ dirs."""
-    import glob
     conn = get_db()
     rows = conn.execute(
         "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
@@ -364,9 +362,6 @@ def setup():
         admin_email_addr = request.form.get("admin_email", "").strip()
 
         email_domains = request.form.get("email_domains", "").strip()
-        smtp = request.form.get("smtp_host", "localhost").strip()
-        smtp_p = request.form.get("smtp_port", "25").strip()
-        from_addr = request.form.get("from_email", "").strip()
 
         domain = request.form.get("base_domain", "example.com").strip()
         hostname = request.form.get("lab_hostname", "").strip()
@@ -412,22 +407,16 @@ def setup():
                                    admin_user=admin_username,
                                    admin_email=admin_email_addr,
                                    email_domains=email_domains,
-                                   smtp_host=smtp, smtp_port=smtp_p,
-                                   from_email=from_addr,
                                    base_domain=domain,
                                    lab_hostname=hostname,
                                    storage_dir=storage,
                                    slots=slots)
 
-        # Save everything to DB
         config.set_site_bulk({
             "admin_user": admin_username,
             "admin_password": hash_password(admin_password),
             "admin_email": admin_email_addr,
             "allowed_email_domains": email_domains,
-            "smtp_host": smtp,
-            "smtp_port": smtp_p,
-            "from_email": from_addr,
             "base_domain": domain,
             "lab_hostname": hostname or domain,
             "cluster_slots": json.dumps(slots),
@@ -456,8 +445,7 @@ def setup():
     # GET — show setup form with defaults
     return render_template("setup.html", errors=[],
                            admin_user="admin", admin_email="",
-                           email_domains="", smtp_host="localhost",
-                           smtp_port="25", from_email="",
+                           email_domains="",
                            base_domain="example.com", lab_hostname="",
                            storage_dir="/kvm",
                            slots={"cluster1": 110, "cluster2": 120, "cluster3": 130})
@@ -504,7 +492,7 @@ def index():
 
 
 @app.route("/admin/maintenance", methods=["POST"])
-@login_required
+@login_required(admin_only=True)
 def admin_set_maintenance():
     msg = request.form.get("message", "").strip()
     if msg:
@@ -529,7 +517,7 @@ def logout():
 
 
 @app.route("/admin")
-@login_required
+@login_required(admin_only=True)
 def admin_panel():
     conn = get_db()
     users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
@@ -538,7 +526,7 @@ def admin_panel():
 
 
 @app.route("/admin/activity")
-@user_login_required
+@login_required
 def admin_activity():
     if not session.get("admin"):
         abort(403)
@@ -574,7 +562,7 @@ def admin_activity():
 
 
 @app.route("/admin/user/<int:user_id>/toggle", methods=["POST"])
-@login_required
+@login_required(admin_only=True)
 def admin_toggle_user(user_id):
     conn = get_db()
     user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
@@ -591,7 +579,7 @@ def admin_toggle_user(user_id):
 
 
 @app.route("/admin/user/<int:user_id>/reset-password", methods=["POST"])
-@login_required
+@login_required(admin_only=True)
 def admin_reset_password(user_id):
     conn = get_db()
     user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
@@ -604,8 +592,7 @@ def admin_reset_password(user_id):
     conn.commit()
     conn.close()
     full_name = f"{user['first_name']} {user['last_name']}"
-    send_password_reset_notification(user["email"], full_name, password)
-    flash(f"Password reset for {full_name}. New credentials emailed to {user['email']}.", "success")
+    flash(f"Password reset for {full_name}. New password: {password}", "success")
     return redirect(url_for("admin_panel", status="all"))
 
 
@@ -687,65 +674,6 @@ def create_linux_user(username, first_name, last_name):
 
 # --- User Auth ---
 
-@app.route("/user/forgot-password", methods=["GET", "POST"])
-@setup_required
-def forgot_password():
-    if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        conn = get_db()
-        user = conn.execute("SELECT * FROM users WHERE email=? AND is_active=1",
-                            (email,)).fetchone()
-        if user:
-            token = secrets.token_urlsafe(32)
-            expires = datetime.utcnow().isoformat(timespec="seconds")
-            conn.execute(
-                "INSERT OR REPLACE INTO password_resets (email, token, expires_at) "
-                "VALUES (?, ?, datetime(?, '+1 hour'))",
-                (email, token, expires)
-            )
-            conn.commit()
-            send_reset_token_email(email,
-                                   f"{user['first_name']} {user['last_name']}",
-                                   token)
-        conn.close()
-        flash("If that email exists in our system, a reset link has been sent.", "success")
-        return redirect(url_for("user_login"))
-    return render_template("forgot_password.html")
-
-
-@app.route("/user/reset-password/<token>", methods=["GET", "POST"])
-@setup_required
-def reset_password(token):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM password_resets WHERE token=? AND expires_at > datetime('now')",
-        (token,)
-    ).fetchone()
-    if not row:
-        conn.close()
-        flash("Invalid or expired reset link. Please request a new one.", "danger")
-        return redirect(url_for("forgot_password"))
-
-    if request.method == "POST":
-        password = request.form.get("password", "")
-        password2 = request.form.get("password2", "")
-        if len(password) < 8:
-            flash("Password must be at least 8 characters.", "danger")
-            return render_template("reset_password.html", token=token)
-        if password != password2:
-            flash("Passwords do not match.", "danger")
-            return render_template("reset_password.html", token=token)
-
-        conn.execute("UPDATE users SET password_hash=? WHERE email=?",
-                     (hash_password(password), row["email"]))
-        conn.execute("DELETE FROM password_resets WHERE email=?", (row["email"],))
-        conn.commit()
-        conn.close()
-        flash("Password updated. You can now log in.", "success")
-        return redirect(url_for("user_login"))
-
-    conn.close()
-    return render_template("reset_password.html", token=token)
 
 
 @app.route("/user/login", methods=["GET", "POST"])
@@ -824,7 +752,7 @@ def _check_resources(install_type):
 
 
 @app.route("/user/dashboard")
-@user_login_required
+@login_required
 def user_dashboard():
     vms, clusters, resources = get_lab_status()
     slots = config.cluster_slots()
@@ -854,7 +782,7 @@ def user_dashboard():
 # --- Cluster Management ---
 
 @app.route("/cluster/kubeconfig/<cluster_name>")
-@user_login_required
+@login_required
 def cluster_kubeconfig(cluster_name):
     """Serve kubeconfig file for download."""
     if not re.match(r'^[a-zA-Z0-9_-]+$', cluster_name):
@@ -880,7 +808,7 @@ def cluster_kubeconfig(cluster_name):
 
 
 @app.route("/cluster/create", methods=["POST"])
-@user_login_required
+@login_required
 def cluster_create():
     cluster_name = request.form.get("cluster_name", "").strip()
     ocp_version = request.form.get("ocp_version", "").strip()
@@ -996,7 +924,7 @@ def cluster_create():
 
 
 @app.route("/cluster/delete", methods=["POST"])
-@user_login_required
+@login_required
 def cluster_delete():
     cluster_name = request.form.get("cluster_name", "").strip()
     if not cluster_name:
@@ -1169,7 +1097,7 @@ def cluster_delete():
 
 
 @app.route("/cluster/reserve", methods=["POST"])
-@user_login_required
+@login_required
 def cluster_reserve():
     cluster_name = request.form.get("cluster_name", "").strip()
     purpose = request.form.get("purpose", "").strip()[:80]
@@ -1209,7 +1137,7 @@ def cluster_reserve():
 
 
 @app.route("/cluster/release", methods=["POST"])
-@user_login_required
+@login_required
 def cluster_release():
     cluster_name = request.form.get("cluster_name", "").strip()
     if not cluster_name:
@@ -1272,7 +1200,7 @@ def cluster_logs(cluster_name):
 # --- Web Terminal ---
 
 @app.route("/user/terminal")
-@user_login_required
+@login_required
 def user_terminal():
     cluster = request.args.get("cluster", "")
     return render_template("terminal.html", cluster=cluster)
@@ -1348,10 +1276,9 @@ def terminal_connect(auth=None):
         os.execlp("su", "su", "-", linux_user, "-w", "TERM")
     else:
         try:
-            import time as _time
             terminal_sessions[request.sid] = {
                 "fd": fd, "pid": pid,
-                "last_activity": _time.time(), "warned": False
+                "last_activity": time.time(), "warned": False
             }
             _set_terminal_size(fd, 24, 80)
             socketio.start_background_task(_read_pty_output, request.sid, fd)
@@ -1359,7 +1286,6 @@ def terminal_connect(auth=None):
             if cluster:
                 kc_path = _find_kubeconfig(cluster)
                 if kc_path:
-                    import time
                     time.sleep(0.5)
                     cmd = f"export KUBECONFIG={kc_path}\n"
                     try:
@@ -1377,7 +1303,7 @@ def terminal_input(data):
     sess = terminal_sessions.get(request.sid)
     if sess:
         import time as _time
-        sess["last_activity"] = _time.time()
+        sess["last_activity"] = time.time()
         sess["warned"] = False
         try:
             os.write(sess["fd"], data["input"].encode("utf-8"))
@@ -1405,7 +1331,7 @@ def _terminal_reaper():
     import time as _time
     while True:
         _time.sleep(60)  # check every minute
-        now = _time.time()
+        now = time.time()
         for sid, sess in list(terminal_sessions.items()):
             idle = now - sess["last_activity"]
 

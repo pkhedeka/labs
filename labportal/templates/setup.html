@@ -85,38 +85,15 @@
 
         <!-- Email Settings -->
         <div class="dash-card">
-            <div class="dash-card-header"><h2>Email Settings</h2></div>
+            <div class="dash-card-header"><h2>Access Control</h2></div>
             <div class="dash-card-body">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-                    <div class="pf-v5-c-form__group">
-                        <label class="pf-v5-c-form__label" for="email_domains">
-                            <span class="pf-v5-c-form__label-text">Allowed Email Domains</span>
-                        </label>
-                        <input class="pf-v5-c-form-control" type="text" id="email_domains" name="email_domains"
-                               value="{{ email_domains }}" placeholder="e.g. myorg.com,partner.com">
-                        <span class="pf-v5-c-helper-text__item-text">Comma-separated. Leave blank to allow all.</span>
-                    </div>
-                    <div class="pf-v5-c-form__group">
-                        <label class="pf-v5-c-form__label" for="from_email">
-                            <span class="pf-v5-c-form__label-text">From Address</span>
-                        </label>
-                        <input class="pf-v5-c-form-control" type="email" id="from_email" name="from_email"
-                               value="{{ from_email }}" placeholder="labportal@mylab.local">
-                    </div>
-                    <div class="pf-v5-c-form__group">
-                        <label class="pf-v5-c-form__label" for="smtp_host">
-                            <span class="pf-v5-c-form__label-text">SMTP Host</span>
-                        </label>
-                        <input class="pf-v5-c-form-control" type="text" id="smtp_host" name="smtp_host"
-                               value="{{ smtp_host }}" placeholder="smtp.myorg.com">
-                    </div>
-                    <div class="pf-v5-c-form__group">
-                        <label class="pf-v5-c-form__label" for="smtp_port">
-                            <span class="pf-v5-c-form__label-text">SMTP Port</span>
-                        </label>
-                        <input class="pf-v5-c-form-control" type="number" id="smtp_port" name="smtp_port"
-                               value="{{ smtp_port }}" placeholder="25">
-                    </div>
+                <div class="pf-v5-c-form__group">
+                    <label class="pf-v5-c-form__label" for="email_domains">
+                        <span class="pf-v5-c-form__label-text">Allowed Email Domains</span>
+                    </label>
+                    <input class="pf-v5-c-form-control" type="text" id="email_domains" name="email_domains"
+                           value="{{ email_domains }}" placeholder="e.g. myorg.com,partner.com">
+                    <span class="pf-v5-c-helper-text__item-text">Comma-separated. Leave blank to allow all.</span>
                 </div>
             </div>
         </div>
