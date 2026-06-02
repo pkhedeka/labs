@@ -857,7 +857,8 @@ def user_dashboard():
 @user_login_required
 def cluster_kubeconfig(cluster_name):
     """Serve kubeconfig file for download."""
-    import glob
+    if not re.match(r'^[a-zA-Z0-9_-]+$', cluster_name):
+        abort(400)
     kubeconfig_path = None
     # Try DB first for the exact path
     conn = get_db()
@@ -969,16 +970,15 @@ def cluster_create():
     try:
         env = os.environ.copy()
         env["BASE_DOMAIN"] = config.base_domain()
-        log_fd = open(log_file, "w")
-        proc = subprocess.Popen(
-            [deploy_script, ocp_version, cluster_name, str(ip_offset), network_type],
-            stdout=log_fd,
-            stderr=subprocess.STDOUT,
-            cwd="/root",
-            start_new_session=True,
-            env=env
-        )
-        log_fd.close()
+        with open(log_file, "w") as log_fd:
+            proc = subprocess.Popen(
+                [deploy_script, ocp_version, cluster_name, str(ip_offset), network_type],
+                stdout=log_fd,
+                stderr=subprocess.STDOUT,
+                cwd="/root",
+                start_new_session=True,
+                env=env
+            )
         conn = get_db()
         conn.execute(
             "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
@@ -988,7 +988,7 @@ def cluster_create():
         conn.commit()
         conn.close()
         log_activity("cluster_deploy", f"{cluster_name} {install_type.upper()} OCP {ocp_version}")
-        flash(f"Cluster '{cluster_name}' ({itype['label']}) deployment started (OCP {ocp_version}). You will be notified via email upon successful installation.", "success")
+        flash(f"Cluster '{cluster_name}' ({itype['label']}) deployment started (OCP {ocp_version}).", "success")
     except Exception as e:
         flash(f"Failed to start deployment: {e}", "danger")
 
@@ -1279,8 +1279,11 @@ def user_terminal():
 
 
 def _set_terminal_size(fd, rows, cols):
-    winsize = struct.pack("HHHH", rows, cols, 0, 0)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    try:
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    except OSError:
+        pass
 
 
 def _read_pty_output(sid, fd):
@@ -1317,7 +1320,8 @@ def _cleanup_terminal(sid):
 
 def _find_kubeconfig(cluster_name):
     """Find kubeconfig path for a cluster."""
-    import glob
+    if not re.match(r'^[a-zA-Z0-9_-]+$', cluster_name):
+        return None
     matches = glob.glob(f"{config.storage_dir()}/clusters/{cluster_name}-*/auth/kubeconfig")
     if matches:
         # Sort by mtime, newest first
@@ -1343,27 +1347,29 @@ def terminal_connect(auth=None):
         os.environ["TERM"] = "xterm-256color"
         os.execlp("su", "su", "-", linux_user, "-w", "TERM")
     else:
-        import time as _time
-        terminal_sessions[request.sid] = {
-            "fd": fd, "pid": pid,
-            "last_activity": _time.time(), "warned": False
-        }
-        _set_terminal_size(fd, 24, 80)
-        socketio.start_background_task(_read_pty_output, request.sid, fd)
+        try:
+            import time as _time
+            terminal_sessions[request.sid] = {
+                "fd": fd, "pid": pid,
+                "last_activity": _time.time(), "warned": False
+            }
+            _set_terminal_size(fd, 24, 80)
+            socketio.start_background_task(_read_pty_output, request.sid, fd)
 
-        # Auto-export KUBECONFIG if cluster was specified
-        if cluster:
-            kc_path = _find_kubeconfig(cluster)
-            if kc_path:
-                import time
-                time.sleep(0.5)  # wait for shell to be ready
-                cmd = f"export KUBECONFIG={kc_path}\n"
-                try:
-                    os.write(fd, cmd.encode())
-                except OSError:
-                    pass
+            if cluster:
+                kc_path = _find_kubeconfig(cluster)
+                if kc_path:
+                    import time
+                    time.sleep(0.5)
+                    cmd = f"export KUBECONFIG={kc_path}\n"
+                    try:
+                        os.write(fd, cmd.encode())
+                    except OSError:
+                        pass
 
-        log_activity("terminal_open", f"{user_email} cluster={cluster}" if cluster else user_email)
+            log_activity("terminal_open", f"{user_email} cluster={cluster}" if cluster else user_email)
+        except Exception:
+            _cleanup_terminal(request.sid)
 
 
 @socketio.on("pty_input", namespace="/terminal")
