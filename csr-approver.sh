@@ -59,11 +59,11 @@ is_cluster_ready() {
     total=$(oc get co --no-headers 2>/dev/null | wc -l)
     [ "$total" -eq 0 ] && return 1
 
-    avail=$(oc get co -o go-template='{{range .items}}{{range .status.conditions}}{{if eq .type "Available"}}{{if eq .status "True"}}1{{end}}{{end}}{{end}}{{end}}' 2>/dev/null | wc -c)
+    avail=$(oc get co -o go-template='{{range .items}}{{range .status.conditions}}{{if eq .type "Available"}}{{if eq .status "True"}}1{{end}}{{end}}{{end}}{{end}}' 2>/dev/null | tr -d '[:space:]' | wc -c)
 
-    progressing=$(oc get co -o go-template='{{range .items}}{{range .status.conditions}}{{if eq .type "Progressing"}}{{if eq .status "True"}}1{{end}}{{end}}{{end}}{{end}}' 2>/dev/null | wc -c)
+    progressing=$(oc get co -o go-template='{{range .items}}{{range .status.conditions}}{{if eq .type "Progressing"}}{{if eq .status "True"}}1{{end}}{{end}}{{end}}{{end}}' 2>/dev/null | tr -d '[:space:]' | wc -c)
 
-    if [ "$avail" -ge "$total" ] && [ "$progressing" -le 1 ]; then
+    if [ "$avail" -ge "$total" ] && [ "$progressing" -eq 0 ]; then
         return 0
     fi
     return 1

@@ -11,6 +11,7 @@ import pty
 import re
 import secrets
 import shutil
+import sqlite3
 import urllib.request
 import urllib.error
 import select
@@ -968,14 +969,16 @@ def cluster_create():
     try:
         env = os.environ.copy()
         env["BASE_DOMAIN"] = config.base_domain()
+        log_fd = open(log_file, "w")
         proc = subprocess.Popen(
             [deploy_script, ocp_version, cluster_name, str(ip_offset), network_type],
-            stdout=open(log_file, "w"),
+            stdout=log_fd,
             stderr=subprocess.STDOUT,
             cwd="/root",
             start_new_session=True,
             env=env
         )
+        log_fd.close()
         conn = get_db()
         conn.execute(
             "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
@@ -1186,16 +1189,6 @@ def cluster_reserve():
 
     conn = get_db()
     conn.execute("DELETE FROM cluster_reservations WHERE reserved_until < datetime('now')")
-    existing = conn.execute(
-        "SELECT reserved_by FROM cluster_reservations WHERE cluster_name=?",
-        (cluster_name,)
-    ).fetchone()
-    if existing:
-        conn.close()
-        flash(f"Cluster '{cluster_name}' is already reserved by {existing['reserved_by'].split('@')[0]}.", "warning")
-        return redirect(url_for("user_dashboard"))
-
-    import sqlite3 as _sqlite3
     try:
         conn.execute(
             "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
@@ -1203,9 +1196,9 @@ def cluster_reserve():
             (cluster_name, session.get("user_email"), purpose, str(hours))
         )
         conn.commit()
-    except _sqlite3.IntegrityError:
+    except sqlite3.IntegrityError:
         conn.close()
-        flash(f"Cluster '{cluster_name}' was just reserved by someone else.", "warning")
+        flash(f"Cluster '{cluster_name}' is already reserved.", "warning")
         return redirect(url_for("user_dashboard"))
     conn.close()
 
