@@ -37,6 +37,89 @@
     </div>
 </div>
 
+{% if reset_requests %}
+<div class="dash-card" style="margin-bottom: 1.5rem;">
+    <div class="dash-card-header">
+        <h2>Pending Password Reset Requests</h2>
+        <span class="stat-pill" style="background: #f0ab00; color: #1b1d21;">{{ reset_requests|length }} pending</span>
+    </div>
+    <div class="dash-card-body" style="padding: 0; overflow-x: auto;">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Requested</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for req in reset_requests %}
+                <tr>
+                    <td><code style="color: #73bcf7; font-size: 0.85rem;">{{ req.email }}</code></td>
+                    <td>{{ req.first_name or '—' }} {{ req.last_name or '' }}</td>
+                    <td style="font-size: 0.8rem; color: #8a8d90; white-space: nowrap;">{{ req.requested_at[:16] if req.requested_at else '—' }}</td>
+                    <td>
+                        {% if req.user_id %}
+                        <form method="post" action="{{ url_for('admin_reset_password', user_id=req.user_id) }}"
+                              onsubmit="return confirm('Reset password for {{ req.email }}?')">
+                            <button type="submit" class="admin-action-btn admin-btn-reset">Reset Password</button>
+                        </form>
+                        {% else %}
+                        <span style="color: #8a8d90; font-size: 0.8rem;">User not found</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="dash-card" style="margin-bottom: 1.5rem;">
+    <div class="dash-card-header">
+        <h2>Add User</h2>
+    </div>
+    <div class="dash-card-body">
+        <form method="post" action="{{ url_for('admin_add_user') }}" class="pf-v5-c-form"
+              style="display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap;">
+            <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
+                <label class="pf-v5-c-form__label" for="add_email">
+                    <span class="pf-v5-c-form__label-text">Email</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="email" id="add_email" name="email"
+                           required placeholder="user@example.com">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="min-width: 140px;">
+                <label class="pf-v5-c-form__label" for="add_first">
+                    <span class="pf-v5-c-form__label-text">First Name</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="add_first" name="first_name"
+                           required placeholder="First">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="min-width: 140px;">
+                <label class="pf-v5-c-form__label" for="add_last">
+                    <span class="pf-v5-c-form__label-text">Last Name</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="add_last" name="last_name"
+                           placeholder="Last">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="display: flex; align-items: center; gap: 0.4rem; padding-bottom: 0.3rem;">
+                <input type="checkbox" id="add_admin" name="is_admin" value="1">
+                <label for="add_admin" style="font-size: 0.85rem; color: #c9190b; cursor: pointer;">Admin</label>
+            </div>
+            <button class="pf-v5-c-button pf-m-primary pf-m-small" type="submit" style="margin-bottom: 0.3rem;">Add User</button>
+        </form>
+    </div>
+</div>
+
 {% if users %}
 <div class="dash-card">
     <div class="dash-card-header">

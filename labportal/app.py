@@ -120,6 +120,8 @@ def login_required(admin_only=False):
         def decorated(*args, **kwargs):
             if not session.get("user_email"):
                 return redirect(url_for("user_login"))
+            if session.get("force_password_change"):
+                return redirect(url_for("change_password"))
             if admin_only and not session.get("admin"):
                 abort(403)
             return f(*args, **kwargs)
@@ -521,8 +523,14 @@ def logout():
 def admin_panel():
     conn = get_db()
     users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    reset_requests = conn.execute(
+        "SELECT r.*, u.id as user_id, u.first_name, u.last_name "
+        "FROM password_reset_requests r "
+        "LEFT JOIN users u ON r.email = u.email "
+        "WHERE r.status='pending' ORDER BY r.requested_at DESC"
+    ).fetchall()
     conn.close()
-    return render_template("admin.html", users=users)
+    return render_template("admin.html", users=users, reset_requests=reset_requests)
 
 
 @app.route("/admin/activity")
@@ -587,13 +595,57 @@ def admin_reset_password(user_id):
         conn.close()
         abort(404)
     password = generate_password()
-    conn.execute("UPDATE users SET password_hash=? WHERE id=?",
+    conn.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?",
                  (hash_password(password), user_id))
+    conn.execute("UPDATE password_reset_requests SET status='completed' WHERE email=? AND status='pending'",
+                 (user["email"],))
     conn.commit()
     conn.close()
     full_name = f"{user['first_name']} {user['last_name']}"
     flash(f"Password reset for {full_name}. New password: {password}", "success")
+    log_activity("admin_password_reset", f"Reset password for {user['email']}")
     return redirect(url_for("admin_panel", status="all"))
+
+
+@app.route("/admin/user/add", methods=["POST"])
+@login_required(admin_only=True)
+def admin_add_user():
+    email = request.form.get("email", "").strip().lower()
+    first_name = request.form.get("first_name", "").strip()
+    last_name = request.form.get("last_name", "").strip()
+    make_admin = request.form.get("is_admin") == "1"
+
+    if not email or not first_name:
+        flash("Email and first name are required.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    valid, result = validate_email(email)
+    if not valid:
+        flash(result, "danger")
+        return redirect(url_for("admin_panel"))
+    email = result
+
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+    if existing:
+        conn.close()
+        flash(f"User with email {email} already exists.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    password = generate_password()
+    linux_user = derive_linux_username(email)
+    conn.execute(
+        "INSERT INTO users (email, first_name, last_name, linux_username, password_hash, is_active, is_admin, must_change_password) "
+        "VALUES (?, ?, ?, ?, ?, 1, ?, 1)",
+        (email, first_name, last_name, linux_user, hash_password(password), 1 if make_admin else 0)
+    )
+    conn.commit()
+    conn.close()
+
+    create_linux_user(linux_user, first_name, last_name)
+    log_activity("user_created", f"{first_name} {last_name} ({email})")
+    flash(f"User {first_name} {last_name} created. Temporary password: {password}", "success")
+    return redirect(url_for("admin_panel"))
 
 
 def derive_linux_username(email):
@@ -695,6 +747,9 @@ def user_login():
             if user["is_admin"]:
                 session["admin"] = True
             log_activity("login", f"{user['first_name']} {user['last_name']}")
+            if user["must_change_password"]:
+                session["force_password_change"] = True
+                return redirect(url_for("change_password"))
             return redirect(url_for("user_dashboard"))
         else:
             flash("Invalid email or password.", "danger")
@@ -708,7 +763,58 @@ def user_logout():
     session.pop("user_email", None)
     session.pop("user_name", None)
     session.pop("admin", None)
+    session.pop("force_password_change", None)
     return redirect(url_for("index"))
+
+
+@app.route("/user/forgot-password", methods=["GET", "POST"])
+@setup_required
+def forgot_password():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        conn = get_db()
+        user = conn.execute("SELECT id FROM users WHERE email=? AND is_active=1", (email,)).fetchone()
+        if user:
+            conn.execute(
+                "INSERT INTO password_reset_requests (email) VALUES (?)",
+                (email,)
+            )
+            conn.commit()
+        conn.close()
+        flash("Password reset request submitted. An admin will reset your password shortly.", "success")
+        return redirect(url_for("user_login"))
+    return render_template("forgot_password.html")
+
+
+@app.route("/user/change-password", methods=["GET", "POST"])
+def change_password():
+    if not session.get("user_email") or not session.get("force_password_change"):
+        return redirect(url_for("user_login"))
+
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        password2 = request.form.get("password2", "")
+
+        if len(password) < 8:
+            flash("Password must be at least 8 characters.", "danger")
+            return render_template("reset_password.html", force_change=True)
+        if password != password2:
+            flash("Passwords do not match.", "danger")
+            return render_template("reset_password.html", force_change=True)
+
+        conn = get_db()
+        conn.execute(
+            "UPDATE users SET password_hash=?, must_change_password=0 WHERE email=?",
+            (hash_password(password), session["user_email"])
+        )
+        conn.commit()
+        conn.close()
+        session.pop("force_password_change", None)
+        log_activity("password_changed", "User set own password")
+        flash("Password updated successfully.", "success")
+        return redirect(url_for("user_dashboard"))
+
+    return render_template("reset_password.html", force_change=True)
 
 
 def _find_next_ipi_offset(clusters):
