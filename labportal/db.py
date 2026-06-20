@@ -36,6 +36,13 @@ def init_db():
             expires_at TIMESTAMP NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS password_reset_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'pending'
+        );
+
         CREATE TABLE IF NOT EXISTS activity_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -102,6 +109,11 @@ def init_db():
         conn.execute("SELECT description FROM deployments LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE deployments ADD COLUMN description TEXT DEFAULT ''")
+
+    try:
+        conn.execute("SELECT must_change_password FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
 
     conn.commit()
     conn.close()
