@@ -30,12 +30,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
-        CREATE TABLE IF NOT EXISTS password_resets (
-            email TEXT PRIMARY KEY,
-            token TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS password_reset_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL,
@@ -72,6 +66,15 @@ def init_db():
             purpose TEXT NOT NULL DEFAULT '',
             reserved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             reserved_until TIMESTAMP NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS cluster_extension_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cluster_name TEXT NOT NULL,
+            requested_by TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'pending'
         );
     """)
 

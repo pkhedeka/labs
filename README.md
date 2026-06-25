@@ -7,7 +7,7 @@
 [![Flask](https://img.shields.io/badge/Flask-3.x-000000?logo=flask)](.)
 [![PatternFly](https://img.shields.io/badge/PatternFly-5-004080)](https://www.patternfly.org)
 
-A self-service web portal and automation toolkit for deploying and managing OpenShift 4.x clusters on a shared KVM/libvirt host. Supports multiple installation methods (UPI and IPI baremetal) with resource-aware dynamic slot management. Users request access, admins approve, and approved users deploy clusters from the browser — DNS, HAProxy/keepalived, DHCP, VMs, and ignition are all handled automatically.
+A self-service web portal and automation toolkit for deploying and managing OpenShift 4.x clusters on a shared KVM/libvirt host. Supports multiple installation methods (UPI and IPI baremetal) with resource-aware dynamic slot management and automatic cluster lifecycle enforcement. Users deploy clusters from the browser with a mandatory lifetime — DNS, HAProxy/keepalived, DHCP, VMs, and ignition are all handled automatically.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ A self-service web portal and automation toolkit for deploying and managing Open
                          ┌──────────────▼───────────────────┐
                          │   Lab Portal (Flask + SocketIO)  │
                          │  ┌─────────┐  ┌───────────────┐  │
-                         │  │ SQLite  │  │  SMTP Mailer  │  │
+                         │  │ SQLite  │  │ Lifecycle Mgr │  │
                          │  └─────────┘  └───────────────┘  │
                          │  ┌────────────────────────────┐  │
                          │  │Web Terminal (xterm.js/PTY) │  │
@@ -59,7 +59,7 @@ sequenceDiagram
     rect rgb(40, 40, 45)
     Note over User,Portal: Access & Deploy
     User->>Portal: Select cluster slot (upi1/upi2/upi3)
-    User->>Portal: Choose OCP version, click Deploy
+    User->>Portal: Choose OCP version, set lifetime, click Deploy
     Portal->>Script: Launch deploy (detached process)
     Portal-->>User: "Deployment started" toast notification
     end
@@ -84,6 +84,12 @@ sequenceDiagram
     Script->>OCP: wait-for install-complete
     OCP-->>Script: Cluster ready — MOTD updated with credentials
     end
+
+    rect rgb(35, 35, 45)
+    Note over Portal: Lifecycle Management
+    Portal->>Portal: Background reaper checks every 5 min
+    Portal->>Libvirt: Auto-delete expired clusters (VMs + storage)
+    end
 ```
 
 ## Components
@@ -96,10 +102,9 @@ labs/
 ├── csr-approver.sh           # Auto-approve CSRs until cluster ready (systemd template)
 ├── update-motd.sh            # Dynamic SSH MOTD — shows active clusters + credentials
 ├── labportal/
-│   ├── app.py                # Flask + SocketIO app (routes, auth, terminal, cluster mgmt)
+│   ├── app.py                # Flask + SocketIO app (routes, auth, terminal, lifecycle)
 │   ├── config.py             # Configuration (install types, cluster slots, env vars)
-│   ├── db.py                 # SQLite schema (users, requests, deployments, activity)
-│   ├── mail.py               # SMTP email notifications
+│   ├── db.py                 # SQLite schema (users, deployments, reservations, extensions)
 │   ├── requirements.txt      # Python dependencies (flask, flask-socketio)
 │   ├── labportal.service     # systemd unit file for production deployment
 │   ├── static/
@@ -112,17 +117,35 @@ labs/
 │       ├── terminal.html      # Web terminal (xterm.js + SocketIO)
 │       ├── cluster_logs.html  # Live deployment log viewer
 │       ├── activity_log.html  # Admin activity log with filtering
-│       ├── request_form.html  # Access request form
-│       ├── admin.html         # Admin panel (requests + users)
+│       ├── admin.html         # Admin panel (users, extensions, maintenance)
 │       ├── setup.html         # First-run setup wizard
 │       ├── forgot_password.html # Password reset request
 │       └── reset_password.html  # Password reset form
 └── README.md
 ```
 
+## Cluster Lifecycle
+
+Every cluster has a mandatory **lifetime** set at deploy time. When the lifetime expires, the cluster is **automatically deleted** — all VMs, storage, and records are destroyed.
+
+| Lifetime Option | Duration |
+|-----------------|----------|
+| 3 hours | Short tests |
+| 4 hours | Quick validations |
+| 8 hours (default) | Day work |
+| 1 day | Overnight tests |
+| 2 days | Multi-day work |
+| 3 days | Extended testing |
+| 1 week | Max self-service |
+| More than a week | Requires admin approval |
+
+**Extension requests:** Selecting "More than a week" sets a 1-week initial lifetime and sends an extension request to the admin panel. Admins can approve (1-30 day extension) or deny. Denied requests expire at the original 1-week mark.
+
+**Background reaper:** A daemon thread checks every 5 minutes for expired clusters and auto-deletes them, logging the event as `cluster_auto_delete`.
+
 ## Installation Methods
 
-The portal supports multiple installation types. Resource availability (CPU, RAM) is checked before each deployment — deploys are blocked if insufficient resources are available.
+All clusters use **OVNKubernetes** as the network plugin. Resource availability (CPU, RAM) is checked before each deployment — deploys are blocked if insufficient resources are available.
 
 ### UPI (User Provisioned Infrastructure)
 
@@ -270,10 +293,6 @@ All settings via environment variables (or defaults in `config.py`):
 | `LABPORTAL_ADMIN_USER` | `admin` | Admin login username |
 | `LABPORTAL_DB` | `labportal/labportal.db` | SQLite database path |
 | `LABPORTAL_HOSTNAME` | `lab.example.com` | Hostname shown in UI |
-| `LABPORTAL_SMTP_HOST` | `smtp.example.com` | SMTP server |
-| `LABPORTAL_SMTP_PORT` | `25` | SMTP port |
-| `LABPORTAL_ADMIN_EMAIL` | `admin@example.com` | Admin notification email |
-| `LABPORTAL_FROM_EMAIL` | `labportal@lab.example.com` | Sender address |
 | `LABPORTAL_UPI_SCRIPT` | `/root/labs/ocp-upi-deploy.sh` | Path to UPI deploy script |
 | `LABPORTAL_IPI_SCRIPT` | `/root/labs/ocp-ipi-deploy.sh` | Path to IPI deploy script |
 | `CLUSTERS_DIR` | `/kvm/clusters` | Directory where cluster artifacts are stored |
@@ -292,7 +311,7 @@ The host runs with SELinux **enforcing** at all times. Firewall ports are opened
 | VNC | Bound to `127.0.0.1` only — not exposed to the network |
 | DNS zone files | Owned by `named:named` with `named_zone_t` SELinux context; IPI uses separate include files owned by `root:named` |
 | Portal | Runs as root via systemd; proxied through Apache with HTTPS/TLS |
-| SSH accounts | Password expiry (180 days), account lockout after 30 days inactivity |
+| SSH accounts | Password expiry (180 days), account lockout after 30 days inactivity, forced password change on first login |
 
 ## Usage
 
@@ -302,8 +321,17 @@ The host runs with SELinux **enforcing** at all times. Firewall ports are opened
 2. Select an install type (UPI or IPI)
 3. For UPI: select an available cluster slot; for IPI: enter a cluster name
 4. Enter the OCP version (e.g., `4.20.5`) — version is validated against the OCP mirror
-5. Click **Deploy Cluster** — resource availability is checked before launching
-6. Monitor progress via **View Logs**
+5. Set the **cluster lifetime** (3 hours to 1 week) — the cluster will be auto-deleted when this expires
+6. Optionally enter a purpose description
+7. Click **Deploy Cluster** — resource availability is checked before launching
+8. Monitor progress via **View Logs**
+
+### Extend a Cluster Beyond 1 Week
+
+1. Select "More than a week (needs approval)" as the lifetime
+2. The cluster deploys with a 1-week initial lifetime
+3. An extension request is sent to the admin panel
+4. Admin reviews and approves (1-30 day extension) or denies
 
 ### CLI Deploy (without portal)
 
@@ -317,7 +345,7 @@ sudo ./ocp-ipi-deploy.sh 4.20.5 ipi1 140
 
 ### Delete a Cluster
 
-Click **Delete Cluster** in the portal dashboard. This will:
+Click **Delete Cluster** in the portal dashboard (or wait for the lifetime to expire). This will:
 - Destroy and undefine all VMs (`virsh destroy` + `virsh undefine --remove-all-storage`)
 - For IPI: additionally clean up VBMC entries, DHCP reservations, and DNS include records
 - Remove deployment logs
@@ -329,12 +357,13 @@ Click **Delete Cluster** in the portal dashboard. This will:
 | Feature | Description |
 |---------|-------------|
 | **Live Dashboard** | Real-time RAM, storage, CPU utilization, VM count with SVG ring charts (5s polling) |
+| **Cluster Lifecycle** | Mandatory lifetime at deploy time; background reaper auto-deletes expired clusters |
+| **Extension Requests** | "More than a week" triggers admin approval flow; admin can extend 1-30 days |
 | **Web Terminal** | Browser-based shell via xterm.js + SocketIO; per-cluster Terminal buttons auto-set KUBECONFIG; 1-hour inactivity timeout |
-| **Activity Log** | Tracks login, logout, deploy, delete, terminal events with user/IP; admin-visible with filtering and pagination |
+| **Activity Log** | Tracks login, logout, deploy, delete, auto-delete, terminal events with user/IP; admin-visible with filtering and pagination |
+| **User Management** | Admin creates accounts with auto-generated passwords; Linux user creation with group-based access; enable/disable toggle |
 | **Unified Login** | Single login page for users and admins; admin privileges granted via `is_admin` flag |
-| **Access Requests** | Email domain validation, spam protection (1 request / 24h) |
-| **User Accounts** | Created on admin approval, credentials emailed, enable/disable toggle |
-| **Password Reset** | Self-service forgot password flow via email token |
+| **Password Reset** | Self-service forgot password flow; admin-approved reset with forced password change |
 | **Install Types** | UPI (fixed slots, HAProxy) and IPI baremetal (dynamic names, VBMC/ironic, keepalived) |
 | **Resource Check** | Validates CPU/RAM availability before deploying; blocks if insufficient |
 | **Version Validation** | Checks OCP version exists on the mirror before starting deployment |
@@ -343,6 +372,7 @@ Click **Delete Cluster** in the portal dashboard. This will:
 | **View Logs** | Live log tail (last 200 lines) with auto-refresh during deploy |
 | **CSR Auto-Approver** | Systemd template service (`csr-approver@<cluster>`) auto-approves CSRs until all ClusterOperators are Available or 2-hour timeout |
 | **Dynamic MOTD** | SSH login banner shows active clusters, versions (from live API), credentials, and KUBECONFIG paths |
+| **Maintenance Banner** | Admin-configurable maintenance message displayed site-wide |
 | **Toast Notifications** | Centered drop-in popups, auto-dismiss after 6s |
 | **Dark Theme** | PatternFly 5 dark UI with Red Hat Display typography |
 

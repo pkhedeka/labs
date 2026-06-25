@@ -512,15 +512,6 @@ def admin_set_maintenance():
     return redirect(url_for("admin_panel"))
 
 
-@app.route("/login")
-def login():
-    return redirect(url_for("user_login"))
-
-
-@app.route("/logout")
-def logout():
-    return redirect(url_for("user_logout"))
-
 
 @app.route("/admin")
 @login_required(admin_only=True)
@@ -533,8 +524,13 @@ def admin_panel():
         "LEFT JOIN users u ON r.email = u.email "
         "WHERE r.status='pending' ORDER BY r.requested_at DESC"
     ).fetchall()
+    extension_requests = conn.execute(
+        "SELECT * FROM cluster_extension_requests WHERE status='pending' ORDER BY requested_at DESC"
+    ).fetchall()
     conn.close()
-    return render_template("admin.html", users=users, reset_requests=reset_requests)
+    return render_template("admin.html", users=users, reset_requests=reset_requests,
+                           extension_requests=extension_requests,
+                           maintenance_message=config.get_site("maintenance_message") or "")
 
 
 @app.route("/admin/activity")
@@ -649,6 +645,56 @@ def admin_add_user():
     create_linux_user(linux_user, first_name, last_name)
     log_activity("user_created", f"{first_name} {last_name} ({email})")
     flash(f"User {first_name} {last_name} created. Temporary password: {password}", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/extension/<int:req_id>/approve", methods=["POST"])
+@login_required(admin_only=True)
+def admin_approve_extension(req_id):
+    extra_days = request.form.get("extra_days", "7").strip()
+    try:
+        days = int(extra_days)
+        if days < 1 or days > 30:
+            raise ValueError
+    except ValueError:
+        flash("Extension must be 1-30 days.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    conn = get_db()
+    req = conn.execute("SELECT * FROM cluster_extension_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
+    if not req:
+        conn.close()
+        flash("Extension request not found or already handled.", "warning")
+        return redirect(url_for("admin_panel"))
+
+    conn.execute(
+        "UPDATE cluster_reservations SET reserved_until = datetime(reserved_until, '+' || ? || ' days') "
+        "WHERE cluster_name=?",
+        (str(days), req["cluster_name"])
+    )
+    conn.execute("UPDATE cluster_extension_requests SET status='approved' WHERE id=?", (req_id,))
+    conn.commit()
+    conn.close()
+    _write_reservation_file()
+    log_activity("extension_approved", f"{req['cluster_name']} +{days}d (requested by {req['requested_by']})")
+    flash(f"Extended '{req['cluster_name']}' by {days} days.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/extension/<int:req_id>/deny", methods=["POST"])
+@login_required(admin_only=True)
+def admin_deny_extension(req_id):
+    conn = get_db()
+    req = conn.execute("SELECT * FROM cluster_extension_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
+    if not req:
+        conn.close()
+        flash("Extension request not found or already handled.", "warning")
+        return redirect(url_for("admin_panel"))
+    conn.execute("UPDATE cluster_extension_requests SET status='denied' WHERE id=?", (req_id,))
+    conn.commit()
+    conn.close()
+    log_activity("extension_denied", f"{req['cluster_name']} (requested by {req['requested_by']})")
+    flash(f"Extension request for '{req['cluster_name']}' denied.", "info")
     return redirect(url_for("admin_panel"))
 
 
@@ -923,26 +969,25 @@ def cluster_create():
     cluster_name = request.form.get("cluster_name", "").strip()
     ocp_version = request.form.get("ocp_version", "").strip()
     install_type = request.form.get("install_type", "upi").strip()
-    network_type = request.form.get("network_type", "OVNKubernetes").strip()
+    network_type = "OVNKubernetes"
     description = request.form.get("description", "").strip()[:80]
+    reservation_hours_raw = request.form.get("reservation_hours", "").strip()
 
     if not cluster_name or not ocp_version:
         flash("Cluster name and OCP version are required.", "danger")
         return redirect(url_for("user_dashboard"))
 
-    if network_type not in ("OVNKubernetes", "OpenShiftSDN"):
-        flash("Invalid network type.", "danger")
-        return redirect(url_for("user_dashboard"))
-
-    # OpenShiftSDN only supported on OCP 4.14 and below
-    if network_type == "OpenShiftSDN":
+    needs_extension = reservation_hours_raw == "extend"
+    if needs_extension:
+        reservation_hours = 168
+    else:
         try:
-            major, minor = ocp_version.split(".")[:2]
-            if int(major) > 4 or (int(major) == 4 and int(minor) > 14):
-                flash("OpenShiftSDN is only available on OCP 4.14 and below. Use OVNKubernetes for newer versions.", "danger")
-                return redirect(url_for("user_dashboard"))
-        except (ValueError, IndexError):
-            pass
+            reservation_hours = int(reservation_hours_raw)
+            if reservation_hours < 3 or reservation_hours > 168:
+                raise ValueError
+        except (ValueError, TypeError):
+            flash("Cluster lifetime is required (3 hours to 1 week).", "danger")
+            return redirect(url_for("user_dashboard"))
 
     if install_type not in config.INSTALL_TYPES:
         flash(f"Invalid install type '{install_type}'.", "danger")
@@ -1023,14 +1068,158 @@ def cluster_create():
             "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?)",
             (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description)
         )
+        conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
+        conn.execute(
+            "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
+            "VALUES (?, ?, ?, datetime('now', '+' || ? || ' hours'))",
+            (cluster_name, session.get("user_email"), description, str(reservation_hours))
+        )
+        if needs_extension:
+            conn.execute(
+                "INSERT INTO cluster_extension_requests (cluster_name, requested_by, reason) "
+                "VALUES (?, ?, ?)",
+                (cluster_name, session.get("user_email"), description)
+            )
         conn.commit()
         conn.close()
-        log_activity("cluster_deploy", f"{cluster_name} {install_type.upper()} OCP {ocp_version}")
-        flash(f"Cluster '{cluster_name}' ({itype['label']}) deployment started (OCP {ocp_version}).", "success")
+        log_activity("cluster_deploy", f"{cluster_name} {install_type.upper()} OCP {ocp_version} life {reservation_hours}h")
+        _write_reservation_file()
+        life_msg = f"reserved for {reservation_hours}h"
+        if needs_extension:
+            life_msg += " (extension request sent to admin)"
+        flash(f"Cluster '{cluster_name}' ({itype['label']}) deployment started (OCP {ocp_version}), {life_msg}.", "success")
     except Exception as e:
         flash(f"Failed to start deployment: {e}", "danger")
 
     return redirect(url_for("user_dashboard"))
+
+
+def _delete_cluster_internal(cluster_name, cluster_vms):
+    """Delete a cluster's VMs, storage, and DB records. Returns list of errors."""
+    conn = get_db()
+    dep = conn.execute(
+        "SELECT install_type, ip_offset FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
+        (cluster_name,)
+    ).fetchone()
+    conn.close()
+    dep_install_type = dep["install_type"] if dep and dep["install_type"] else "upi"
+    dep_ip_offset = dep["ip_offset"] if dep else None
+
+    errors = []
+    for vm in cluster_vms:
+        try:
+            subprocess.run(["virsh", "destroy", vm["name"]],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+        try:
+            result = subprocess.run(
+                ["virsh", "undefine", vm["name"], "--remove-all-storage"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                errors.append(f"{vm['name']}: {result.stderr.strip()}")
+        except Exception as e:
+            errors.append(f"{vm['name']}: {e}")
+
+    if dep_install_type == "ipi" and dep_ip_offset is not None:
+        vm_prefix = f"vm-{cluster_name}"
+        mac_base = f"{dep_ip_offset:02x}"
+        num_masters = 3
+        num_workers = 2
+
+        for role, count, port_offset in [("master", num_masters, 0), ("worker", num_workers, num_masters)]:
+            for i in range(count):
+                vm_name = f"{vm_prefix}-{role}-{i}"
+                try:
+                    subprocess.run(["vbmc", "stop", vm_name],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
+                try:
+                    subprocess.run(["vbmc", "delete", vm_name],
+                                   capture_output=True, timeout=10)
+                except Exception:
+                    pass
+
+        for base_byte, count in [(0x11, num_masters), (0x21, num_workers)]:
+            for i in range(count):
+                bm_mac = f"52:54:00:{mac_base}:01:{base_byte + i:02x}"
+                try:
+                    subprocess.run(
+                        ["virsh", "net-update", "default", "delete", "ip-dhcp-host",
+                         f"<host mac='{bm_mac}'/>", "--live", "--config"],
+                        capture_output=True, timeout=10
+                    )
+                except Exception:
+                    pass
+
+        fwd_zone = "/var/named/ipi-forward.include"
+        rev_zone = "/var/named/ipi-reverse.include"
+        for zone_file in (fwd_zone, rev_zone):
+            if os.path.isfile(zone_file):
+                try:
+                    subprocess.run(
+                        ["sed", "-i", f"/^; IPI-START {cluster_name}$/,/^; IPI-END {cluster_name}$/d", zone_file],
+                        capture_output=True, timeout=10
+                    )
+                except Exception as e:
+                    errors.append(f"DNS cleanup {zone_file}: {e}")
+
+        try:
+            result = subprocess.run(["virsh", "pool-list", "--all", "--name"],
+                                    capture_output=True, text=True, timeout=10)
+            for pool_name in result.stdout.strip().splitlines():
+                pool_name = pool_name.strip()
+                if not pool_name or pool_name in ("default", "images"):
+                    continue
+                if cluster_name in pool_name:
+                    subprocess.run(["virsh", "pool-destroy", pool_name],
+                                   capture_output=True, timeout=10)
+                    subprocess.run(["virsh", "pool-undefine", pool_name],
+                                   capture_output=True, timeout=10)
+        except Exception as e:
+            errors.append(f"pool cleanup: {e}")
+
+        for img_dir in glob.glob(f"{config.storage_dir()}/libvirt-images/{cluster_name}-*"):
+            if os.path.isdir(img_dir):
+                try:
+                    shutil.rmtree(img_dir)
+                except Exception as e:
+                    errors.append(f"bootstrap image cleanup: {e}")
+
+        try:
+            subprocess.run(["systemctl", "reload", "named"],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT log_file FROM deployments WHERE cluster_name=?", (cluster_name,)
+    ).fetchall()
+    for row in rows:
+        if row["log_file"]:
+            try:
+                os.remove(row["log_file"])
+            except OSError:
+                pass
+    conn.execute("DELETE FROM deployments WHERE cluster_name=?", (cluster_name,))
+    conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
+    conn.commit()
+    conn.close()
+
+    for cluster_dir in glob.glob(f"{config.storage_dir()}/clusters/{cluster_name}-*"):
+        if os.path.isdir(cluster_dir):
+            try:
+                shutil.rmtree(cluster_dir)
+            except Exception as e:
+                errors.append(f"cleanup {cluster_dir}: {e}")
+
+    _write_reservation_file()
+    subprocess.Popen(["/root/labs/update-motd.sh"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return errors
 
 
 @app.route("/cluster/delete", methods=["POST"])
@@ -1058,145 +1247,7 @@ def cluster_delete():
             flash("You can only delete clusters you created.", "danger")
             return redirect(url_for("user_dashboard"))
 
-    # Look up install_type and ip_offset from DB
-    conn = get_db()
-    dep = conn.execute(
-        "SELECT install_type, ip_offset FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
-        (cluster_name,)
-    ).fetchone()
-    conn.close()
-    dep_install_type = dep["install_type"] if dep and dep["install_type"] else "upi"
-    dep_ip_offset = dep["ip_offset"] if dep else None
-
-    errors = []
-    for vm in clusters[cluster_name]:
-        try:
-            subprocess.run(["virsh", "destroy", vm["name"]],
-                           capture_output=True, timeout=10)
-        except Exception:
-            pass
-        try:
-            result = subprocess.run(
-                ["virsh", "undefine", vm["name"], "--remove-all-storage"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                errors.append(f"{vm['name']}: {result.stderr.strip()}")
-        except Exception as e:
-            errors.append(f"{vm['name']}: {e}")
-
-    # IPI-specific cleanup: VBMC, DHCP reservations, DNS blocks
-    if dep_install_type == "ipi" and dep_ip_offset is not None:
-        vm_prefix = f"vm-{cluster_name}"
-        mac_base = f"{dep_ip_offset:02x}"
-        num_masters = 3
-        num_workers = 2
-        vbmc_port_base = 6200 + dep_ip_offset - 100
-
-        # Stop/delete VBMC entries (masters + workers)
-        for role, count, port_offset in [("master", num_masters, 0), ("worker", num_workers, num_masters)]:
-            for i in range(count):
-                vm_name = f"{vm_prefix}-{role}-{i}"
-                try:
-                    subprocess.run(["vbmc", "stop", vm_name],
-                                   capture_output=True, timeout=10)
-                except Exception:
-                    pass
-                try:
-                    subprocess.run(["vbmc", "delete", vm_name],
-                                   capture_output=True, timeout=10)
-                except Exception:
-                    pass
-
-        # Remove DHCP reservations (masters: 0x11+i, workers: 0x21+i)
-        for base_byte, count in [(0x11, num_masters), (0x21, num_workers)]:
-            for i in range(count):
-                bm_mac = f"52:54:00:{mac_base}:01:{base_byte + i:02x}"
-                try:
-                    subprocess.run(
-                        ["virsh", "net-update", "default", "delete", "ip-dhcp-host",
-                         f"<host mac='{bm_mac}'/>", "--live", "--config"],
-                        capture_output=True, timeout=10
-                    )
-                except Exception:
-                    pass
-
-        # Remove DNS blocks from IPI include files
-        fwd_zone = "/var/named/ipi-forward.include"
-        rev_zone = "/var/named/ipi-reverse.include"
-        for zone_file in (fwd_zone, rev_zone):
-            if os.path.isfile(zone_file):
-                try:
-                    subprocess.run(
-                        ["sed", "-i", f"/^; IPI-START {cluster_name}$/,/^; IPI-END {cluster_name}$/d", zone_file],
-                        capture_output=True, timeout=10
-                    )
-                except Exception as e:
-                    errors.append(f"DNS cleanup {zone_file}: {e}")
-
-        # Clean up libvirt storage pools created by IPI installer
-        try:
-            result = subprocess.run(["virsh", "pool-list", "--all", "--name"],
-                                    capture_output=True, text=True, timeout=10)
-            for pool_name in result.stdout.strip().splitlines():
-                pool_name = pool_name.strip()
-                if not pool_name or pool_name in ("default", "images"):
-                    continue
-                if cluster_name in pool_name:
-                    subprocess.run(["virsh", "pool-destroy", pool_name],
-                                   capture_output=True, timeout=10)
-                    subprocess.run(["virsh", "pool-undefine", pool_name],
-                                   capture_output=True, timeout=10)
-        except Exception as e:
-            errors.append(f"pool cleanup: {e}")
-
-        for img_dir in glob.glob(f"{config.storage_dir()}/libvirt-images/{cluster_name}-*"):
-            if os.path.isdir(img_dir):
-                try:
-                    shutil.rmtree(img_dir)
-                except Exception as e:
-                    errors.append(f"bootstrap image cleanup: {e}")
-
-        # Reload named to pick up zone changes
-        try:
-            subprocess.run(["systemctl", "reload", "named"],
-                           capture_output=True, timeout=10)
-        except Exception:
-            pass
-
-    # Delete deployment records and log files
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT log_file FROM deployments WHERE cluster_name=?", (cluster_name,)
-    ).fetchall()
-    for row in rows:
-        if row["log_file"]:
-            try:
-                os.remove(row["log_file"])
-            except OSError:
-                pass
-    conn.execute("DELETE FROM deployments WHERE cluster_name=?", (cluster_name,))
-    conn.commit()
-    conn.close()
-
-    for cluster_dir in glob.glob(f"{config.storage_dir()}/clusters/{cluster_name}-*"):
-        if os.path.isdir(cluster_dir):
-            try:
-                shutil.rmtree(cluster_dir)
-            except Exception as e:
-                errors.append(f"cleanup {cluster_dir}: {e}")
-
-    # Release any reservation on this cluster
-    conn = get_db()
-    conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
-    conn.commit()
-    conn.close()
-    _write_reservation_file()
-
-    # Refresh MOTD to reflect the change
-    subprocess.Popen(["/root/labs/update-motd.sh"],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+    errors = _delete_cluster_internal(cluster_name, clusters[cluster_name])
     log_activity("cluster_delete", cluster_name)
     if errors:
         flash(f"Cluster '{cluster_name}' partially deleted. Errors: {'; '.join(errors)}", "warning")
@@ -1206,77 +1257,6 @@ def cluster_delete():
     return redirect(url_for("user_dashboard"))
 
 
-@app.route("/cluster/reserve", methods=["POST"])
-@login_required
-def cluster_reserve():
-    cluster_name = request.form.get("cluster_name", "").strip()
-    purpose = request.form.get("purpose", "").strip()[:80]
-    duration = request.form.get("duration", "4").strip()
-
-    if not cluster_name:
-        flash("Cluster name is required.", "danger")
-        return redirect(url_for("user_dashboard"))
-
-    try:
-        hours = int(duration)
-        if hours < 1 or hours > 168:
-            raise ValueError
-    except ValueError:
-        flash("Invalid duration. Choose 1-168 hours.", "danger")
-        return redirect(url_for("user_dashboard"))
-
-    conn = get_db()
-    conn.execute("DELETE FROM cluster_reservations WHERE reserved_until < datetime('now')")
-    try:
-        conn.execute(
-            "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
-            "VALUES (?, ?, ?, datetime('now', '+' || ? || ' hours'))",
-            (cluster_name, session.get("user_email"), purpose, str(hours))
-        )
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        flash(f"Cluster '{cluster_name}' is already reserved.", "warning")
-        return redirect(url_for("user_dashboard"))
-    conn.close()
-
-    log_activity("cluster_reserve", f"{cluster_name} for {hours}h: {purpose}")
-    _write_reservation_file()
-    flash(f"Cluster '{cluster_name}' reserved for {hours} hours.", "success")
-    return redirect(url_for("user_dashboard"))
-
-
-@app.route("/cluster/release", methods=["POST"])
-@login_required
-def cluster_release():
-    cluster_name = request.form.get("cluster_name", "").strip()
-    if not cluster_name:
-        flash("Cluster name is required.", "danger")
-        return redirect(url_for("user_dashboard"))
-
-    conn = get_db()
-    existing = conn.execute(
-        "SELECT reserved_by FROM cluster_reservations WHERE cluster_name=?",
-        (cluster_name,)
-    ).fetchone()
-    if not existing:
-        conn.close()
-        flash(f"Cluster '{cluster_name}' is not reserved.", "info")
-        return redirect(url_for("user_dashboard"))
-
-    if existing["reserved_by"] != session.get("user_email") and not session.get("admin"):
-        conn.close()
-        flash("Only the reserver or an admin can release this reservation.", "danger")
-        return redirect(url_for("user_dashboard"))
-
-    conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
-    conn.commit()
-    conn.close()
-
-    log_activity("cluster_release", cluster_name)
-    _write_reservation_file()
-    flash(f"Reservation for '{cluster_name}' released.", "success")
-    return redirect(url_for("user_dashboard"))
 
 
 @app.route("/cluster/logs/<cluster_name>")
@@ -1465,8 +1445,43 @@ def _terminal_reaper():
                 sess["warned"] = True
 
 
-# Start the reaper thread
+def _cluster_lifetime_reaper():
+    """Periodically check for expired cluster reservations and auto-delete those clusters."""
+    while True:
+        time.sleep(300)
+        try:
+            conn = get_db()
+            expired = conn.execute(
+                "SELECT cluster_name FROM cluster_reservations WHERE reserved_until < datetime('now')"
+            ).fetchall()
+            conn.close()
+            if not expired:
+                continue
+            _, clusters, _ = get_lab_status()
+            for row in expired:
+                name = row["cluster_name"]
+                if name in clusters:
+                    _delete_cluster_internal(name, clusters[name])
+                    conn2 = get_db()
+                    conn2.execute(
+                        "INSERT INTO activity_log (event, user_email, ip_address, details) VALUES (?, ?, ?, ?)",
+                        ("cluster_auto_delete", "system", "127.0.0.1", f"{name} (lifetime expired)")
+                    )
+                    conn2.commit()
+                    conn2.close()
+                else:
+                    conn = get_db()
+                    conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (name,))
+                    conn.execute("DELETE FROM deployments WHERE cluster_name=?", (name,))
+                    conn.commit()
+                    conn.close()
+        except Exception:
+            pass
+
+
+# Start the reaper threads
 threading.Thread(target=_terminal_reaper, daemon=True).start()
+threading.Thread(target=_cluster_lifetime_reaper, daemon=True).start()
 
 
 # --- CLI ---

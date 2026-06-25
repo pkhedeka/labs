@@ -37,6 +37,58 @@
     </div>
 </div>
 
+{% if extension_requests %}
+<div class="dash-card" style="margin-bottom: 1.5rem;">
+    <div class="dash-card-header">
+        <h2>Cluster Extension Requests</h2>
+        <span class="stat-pill" style="background: #f0ab00; color: #1b1d21;">{{ extension_requests|length }} pending</span>
+    </div>
+    <div class="dash-card-body" style="padding: 0; overflow-x: auto;">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th>Cluster</th>
+                    <th>Requested By</th>
+                    <th>Reason</th>
+                    <th>Requested</th>
+                    <th>Extend By</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for req in extension_requests %}
+                <tr>
+                    <td><code style="color: #73bcf7; font-size: 0.85rem;">{{ req.cluster_name }}</code></td>
+                    <td>{{ req.requested_by.split('@')[0] }}</td>
+                    <td style="font-size: 0.85rem; color: #c7c7c7;">{{ req.reason or '—' }}</td>
+                    <td style="font-size: 0.8rem; color: #8a8d90; white-space: nowrap;">{{ req.requested_at[:16] if req.requested_at else '—' }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('admin_approve_extension', req_id=req.id) }}" style="display:inline;" id="ext-form-{{ req.id }}">
+                            <select class="pf-v5-c-form-control" name="extra_days" style="width:90px; font-size:0.8rem; padding:0.15rem 0.3rem;">
+                                <option value="7">7 days</option>
+                                <option value="14">14 days</option>
+                                <option value="21">21 days</option>
+                                <option value="30">30 days</option>
+                            </select>
+                        </form>
+                    </td>
+                    <td>
+                        <div style="display: flex; gap: 0.4rem;">
+                            <button type="submit" form="ext-form-{{ req.id }}" class="admin-action-btn admin-btn-enable">Approve</button>
+                            <form method="post" action="{{ url_for('admin_deny_extension', req_id=req.id) }}" style="display:inline;"
+                                  onsubmit="return confirm('Deny extension for {{ req.cluster_name }}? Cluster will be auto-deleted when lifetime expires.');">
+                                <button type="submit" class="admin-action-btn admin-btn-disable">Deny</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
 {% if reset_requests %}
 <div class="dash-card" style="margin-bottom: 1.5rem;">
     <div class="dash-card-header">
