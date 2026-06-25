@@ -167,7 +167,8 @@ def get_cluster_info(clusters):
     """Get deployment metadata (creator, description, install_type) per cluster from DB."""
     conn = get_db()
     rows = conn.execute(
-        "SELECT cluster_name, started_by, description, install_type FROM deployments WHERE status IN ('deploying','completed')"
+        "SELECT cluster_name, started_by, description, install_type, finished_at, started_at "
+        "FROM deployments WHERE status IN ('deploying','completed')"
     ).fetchall()
     conn.close()
     info = {}
@@ -176,6 +177,7 @@ def get_cluster_info(clusters):
             "started_by": row["started_by"] or "",
             "description": row["description"] or "",
             "install_type": row["install_type"] or "upi",
+            "alive_since": row["finished_at"] or row["started_at"] or "",
         }
     return info
 
@@ -483,13 +485,15 @@ def index():
         return redirect(url_for("user_dashboard"))
     vms, clusters, resources = get_lab_status()
     cluster_versions = get_cluster_versions(clusters)
+    cluster_info = get_cluster_info(clusters)
     ssh_user = ""
     if session.get("user_email"):
         ssh_user = derive_linux_username(session["user_email"])
     return render_template("index.html",
                            vms=vms, clusters=clusters, resources=resources,
                            ssh_user=ssh_user, base_domain=config.base_domain(),
-                           cluster_versions=cluster_versions)
+                           cluster_versions=cluster_versions,
+                           cluster_info=cluster_info)
 
 
 

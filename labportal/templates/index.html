@@ -73,6 +73,10 @@
                     <span class="cluster-badge {{ 'badge-ok' if cluster_vms|selectattr('state', 'equalto', 'running')|list|length == cluster_vms|length else 'badge-warn' }}">
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
+                    {% set info = cluster_info.get(cluster_name, {}) if cluster_info is defined else {} %}
+                    {% if info.get('alive_since') %}
+                    <span class="cluster-badge" style="background:#1a1a2e; color:#a78bfa; border-color:#4c1d95;" data-alive-since="{{ info.alive_since }}">&#x23F1; <span class="uptime"></span></span>
+                    {% endif %}
                     {% if session.get('user_email') or session.get('admin') %}
                     <div style="margin-left: auto; display: flex; gap: 0.5rem;">
                         <a href="{{ url_for('user_terminal', cluster=cluster_name) }}" class="pf-v5-c-button pf-m-tertiary pf-m-small" style="font-size: 0.75rem; padding: 0.2rem 0.6rem;" title="Open terminal with KUBECONFIG set">
@@ -287,6 +291,27 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeCliModal();
 });
 
+function formatUptime(sinceStr) {
+    if (!sinceStr) return '';
+    var since = new Date(sinceStr + (sinceStr.includes('Z') || sinceStr.includes('+') ? '' : 'Z'));
+    var elapsed = Math.max(0, Math.floor((new Date() - since) / 1000));
+    var d = Math.floor(elapsed / 86400);
+    var h = Math.floor((elapsed % 86400) / 3600);
+    var m = Math.floor((elapsed % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm';
+}
+
+function updateUptimes() {
+    document.querySelectorAll('[data-alive-since]').forEach(function(el) {
+        var u = el.querySelector('.uptime');
+        if (u) u.textContent = formatUptime(el.getAttribute('data-alive-since'));
+    });
+}
+updateUptimes();
+setInterval(updateUptimes, 60000);
+
 (function() {
     const API = "{{ url_for('api_status') }}";
     const dot = document.getElementById('live-dot');
@@ -365,6 +390,11 @@ document.addEventListener('keydown', function(e) {
                         html += '<span class="cluster-badge" style="background:#1f6bff22;color:#73bcf7;border-color:#1f6bff55;">OCP ' + versions[name] + '</span>';
                     }
                     html += '<span class="cluster-badge ' + badgeClass + '">' + runCount + '/' + vms.length + ' running</span>';
+                    var cInfo = data.cluster_info || {};
+                    var inf = cInfo[name] || {};
+                    if (inf.alive_since) {
+                        html += '<span class="cluster-badge" style="background:#1a1a2e;color:#a78bfa;border-color:#4c1d95;" data-alive-since="' + inf.alive_since + '">&#x23F1; <span class="uptime"></span></span>';
+                    }
                     if (isLoggedIn) {
                         var ver = versions[name] || '';
                         html += '<div style="margin-left:auto;display:flex;gap:0.5rem;">';
@@ -394,6 +424,7 @@ document.addEventListener('keydown', function(e) {
                     html += '</div>';
                 });
                 container.innerHTML = html;
+                updateUptimes();
             })
             .catch(() => {});
     }

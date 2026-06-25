@@ -167,6 +167,9 @@
                         {{ cluster_vms|selectattr('state', 'equalto', 'running')|list|length }}/{{ cluster_vms|length }} running
                     </span>
                     {% set info = cluster_info.get(cluster_name, {}) %}
+                    {% if info.get('alive_since') %}
+                    <span class="cluster-badge" style="background:#1a1a2e; color:#a78bfa; border-color:#4c1d95;" data-alive-since="{{ info.alive_since }}">&#x23F1; <span class="uptime"></span></span>
+                    {% endif %}
                     {% if info.get('started_by') %}
                     <span class="cluster-badge" style="background:#2b2b2b; color:#b8bbbe; border-color:#3c3f42;">{{ info.started_by.split('@')[0] }}</span>
                     {% endif %}
@@ -496,6 +499,27 @@ function updateCountdowns() {
 updateCountdowns();
 setInterval(updateCountdowns, 30000);
 
+function formatUptime(sinceStr) {
+    if (!sinceStr) return '';
+    var since = new Date(sinceStr + (sinceStr.includes('Z') || sinceStr.includes('+') ? '' : 'Z'));
+    var elapsed = Math.max(0, Math.floor((new Date() - since) / 1000));
+    var d = Math.floor(elapsed / 86400);
+    var h = Math.floor((elapsed % 86400) / 3600);
+    var m = Math.floor((elapsed % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm';
+}
+
+function updateUptimes() {
+    document.querySelectorAll('[data-alive-since]').forEach(function(el) {
+        var u = el.querySelector('.uptime');
+        if (u) u.textContent = formatUptime(el.getAttribute('data-alive-since'));
+    });
+}
+updateUptimes();
+setInterval(updateUptimes, 60000);
+
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') { closeCliModal(); closeReserveModal(); }
 });
@@ -559,6 +583,9 @@ document.addEventListener('keydown', function(e) {
                     if (info.description) {
                         html += '<span class="cluster-badge" style="background:#1a2a1a;color:#92d400;border-color:#3e5622;">' + info.description + '</span>';
                     }
+                    if (info.alive_since) {
+                        html += '<span class="cluster-badge" style="background:#1a1a2e;color:#a78bfa;border-color:#4c1d95;" data-alive-since="' + info.alive_since + '">&#x23F1; <span class="uptime"></span></span>';
+                    }
                     if (rv) {
                         var isMine = rv.reserved_by === CURRENT_USER;
                         var rStyle = isMine ? 'background:#1f6bff22;color:#73bcf7;border-color:#1f6bff55;' : 'background:rgba(240,171,0,0.12);color:#f0ab00;border-color:rgba(240,171,0,0.3);';
@@ -600,6 +627,7 @@ document.addEventListener('keydown', function(e) {
                 });
                 container.innerHTML = html;
                 updateCountdowns();
+                updateUptimes();
             })
             .catch(() => {});
     }
