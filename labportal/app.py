@@ -526,9 +526,18 @@ def admin_panel():
     extension_requests = conn.execute(
         "SELECT * FROM cluster_extension_requests WHERE status='pending' ORDER BY requested_at DESC"
     ).fetchall()
+    lab_machines_raw = conn.execute("SELECT * FROM lab_machines ORDER BY added_at DESC").fetchall()
     conn.close()
+    lab_machines = []
+    for m in lab_machines_raw:
+        md = dict(m)
+        try:
+            md["specs"] = json.loads(m["specs_json"]) if m["specs_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            md["specs"] = {}
+        lab_machines.append(md)
     return render_template("admin.html", users=users, reset_requests=reset_requests,
-                           extension_requests=extension_requests,
+                           extension_requests=extension_requests, lab_machines=lab_machines,
                            maintenance_message=config.get_site("maintenance_message") or "")
 
 
@@ -694,6 +703,177 @@ def admin_deny_extension(req_id):
     conn.close()
     log_activity("extension_denied", f"{req['cluster_name']} (requested by {req['requested_by']})")
     flash(f"Extension request for '{req['cluster_name']}' denied.", "info")
+    return redirect(url_for("admin_panel"))
+
+
+def _verify_machine(machine_id):
+    """SSH to a remote machine, check KVM/libvirt, collect specs, update DB."""
+    conn = get_db()
+    machine = conn.execute("SELECT * FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
+    conn.close()
+    if not machine:
+        return
+
+    hostname = machine["hostname"]
+    ssh_user = machine["ssh_user"]
+    ssh_port = machine["ssh_port"]
+    ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+                "-p", str(ssh_port), f"{ssh_user}@{hostname}"]
+
+    conn = get_db()
+    conn.execute("UPDATE lab_machines SET status='verifying', status_detail='Connecting...' WHERE id=?", (machine_id,))
+    conn.commit()
+    conn.close()
+
+    try:
+        result = subprocess.run(ssh_base + ["echo SSH_OK"], capture_output=True, text=True, timeout=15)
+        if "SSH_OK" not in result.stdout:
+            raise Exception(f"SSH failed: {result.stderr.strip()}")
+
+        check_script = (
+            "echo CPUS=$(nproc) && "
+            "echo RAM=$(free -g | awk '/Mem:/{print $2}') && "
+            "echo KVM=$(test -e /dev/kvm && echo yes || echo no) && "
+            "echo LIBVIRT=$(virsh version >/dev/null 2>&1 && echo yes || echo no) && "
+            "echo STORAGE=$(df -BG --output=avail / | tail -1 | tr -d ' G')"
+        )
+        result = subprocess.run(ssh_base + [check_script], capture_output=True, text=True, timeout=30)
+        specs = {}
+        for line in result.stdout.strip().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                specs[k.strip()] = v.strip()
+
+        if specs.get("KVM") != "yes":
+            conn = get_db()
+            conn.execute("UPDATE lab_machines SET status='error', status_detail='No KVM support (/dev/kvm missing)' WHERE id=?", (machine_id,))
+            conn.commit()
+            conn.close()
+            return
+
+        if specs.get("LIBVIRT") != "yes":
+            conn = get_db()
+            conn.execute("UPDATE lab_machines SET status='verifying', status_detail='Installing libvirt...' WHERE id=?", (machine_id,))
+            conn.commit()
+            conn.close()
+            install_result = subprocess.run(
+                ssh_base + ["dnf install -y libvirt qemu-kvm virt-install && systemctl enable --now libvirtd"],
+                capture_output=True, text=True, timeout=300
+            )
+            if install_result.returncode != 0:
+                conn = get_db()
+                conn.execute("UPDATE lab_machines SET status='error', status_detail=? WHERE id=?",
+                             (f"libvirt install failed: {install_result.stderr.strip()[:200]}", machine_id))
+                conn.commit()
+                conn.close()
+                return
+            specs["LIBVIRT"] = "yes"
+
+        specs_json = json.dumps({
+            "cpus": int(specs.get("CPUS", 0)),
+            "ram_gb": int(specs.get("RAM", 0)),
+            "storage_gb": int(specs.get("STORAGE", 0)),
+            "kvm": True,
+            "libvirt": True,
+        })
+
+        conn = get_db()
+        conn.execute("UPDATE lab_machines SET status='ready', status_detail='', specs_json=? WHERE id=?",
+                     (specs_json, machine_id))
+        conn.commit()
+        conn.close()
+
+    except Exception as e:
+        conn = get_db()
+        conn.execute("UPDATE lab_machines SET status='error', status_detail=? WHERE id=?",
+                     (str(e)[:200], machine_id))
+        conn.commit()
+        conn.close()
+
+
+@app.route("/admin/machine/add", methods=["POST"])
+@login_required(admin_only=True)
+def admin_add_machine():
+    name = request.form.get("machine_name", "").strip()
+    hostname = request.form.get("machine_hostname", "").strip()
+    ssh_user = request.form.get("machine_ssh_user", "root").strip()
+    ssh_port = request.form.get("machine_ssh_port", "22").strip()
+
+    if not name or not hostname:
+        flash("Machine name and hostname are required.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,30}$', name):
+        flash("Invalid machine name (alphanumeric, hyphens, dots, underscores).", "danger")
+        return redirect(url_for("admin_panel"))
+
+    try:
+        port = int(ssh_port)
+        if port < 1 or port > 65535:
+            raise ValueError
+    except ValueError:
+        flash("Invalid SSH port.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO lab_machines (name, hostname, ssh_user, ssh_port, added_by) VALUES (?, ?, ?, ?, ?)",
+            (name, hostname, ssh_user, port, session.get("user_email"))
+        )
+        conn.commit()
+        machine_id = conn.execute("SELECT id FROM lab_machines WHERE name=?", (name,)).fetchone()["id"]
+    except sqlite3.IntegrityError:
+        conn.close()
+        flash(f"Machine '{name}' already exists.", "warning")
+        return redirect(url_for("admin_panel"))
+    conn.close()
+
+    log_activity("machine_added", f"{name} ({hostname})")
+    threading.Thread(target=_verify_machine, args=(machine_id,), daemon=True).start()
+    flash(f"Machine '{name}' added. Verification in progress...", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/machine/<int:machine_id>/verify", methods=["POST"])
+@login_required(admin_only=True)
+def admin_verify_machine(machine_id):
+    conn = get_db()
+    machine = conn.execute("SELECT name FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
+    conn.close()
+    if not machine:
+        flash("Machine not found.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    threading.Thread(target=_verify_machine, args=(machine_id,), daemon=True).start()
+    flash(f"Re-verifying '{machine['name']}'...", "info")
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin/machine/<int:machine_id>/remove", methods=["POST"])
+@login_required(admin_only=True)
+def admin_remove_machine(machine_id):
+    conn = get_db()
+    machine = conn.execute("SELECT name FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
+    if not machine:
+        conn.close()
+        flash("Machine not found.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    active = conn.execute(
+        "SELECT COUNT(*) FROM deployments WHERE machine_id=? AND status IN ('deploying','completed')",
+        (machine_id,)
+    ).fetchone()[0]
+    if active > 0:
+        conn.close()
+        flash(f"Cannot remove '{machine['name']}' — {active} active cluster(s) deployed on it.", "danger")
+        return redirect(url_for("admin_panel"))
+
+    conn.execute("DELETE FROM lab_machines WHERE id=?", (machine_id,))
+    conn.commit()
+    conn.close()
+    log_activity("machine_removed", machine["name"])
+    flash(f"Machine '{machine['name']}' removed.", "success")
     return redirect(url_for("admin_panel"))
 
 

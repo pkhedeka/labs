@@ -236,4 +236,128 @@
     </div>
 </div>
 {% endif %}
+
+<div class="dash-card" style="margin-bottom: 1.5rem;">
+    <div class="dash-card-header">
+        <h2>Lab Machines</h2>
+        {% if lab_machines %}
+        <span class="stat-pill">{{ lab_machines|length }} machine{{ 's' if lab_machines|length != 1 }}</span>
+        {% endif %}
+    </div>
+    <div class="dash-card-body">
+        <form method="post" action="{{ url_for('admin_add_machine') }}" class="pf-v5-c-form"
+              style="display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1rem;">
+            <div class="pf-v5-c-form__group" style="min-width: 140px;">
+                <label class="pf-v5-c-form__label" for="machine_name">
+                    <span class="pf-v5-c-form__label-text">Name</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="machine_name" name="machine_name"
+                           required placeholder="e.g. karamchari" maxlength="31">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="flex: 1; min-width: 180px;">
+                <label class="pf-v5-c-form__label" for="machine_hostname">
+                    <span class="pf-v5-c-form__label-text">Hostname / IP</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="machine_hostname" name="machine_hostname"
+                           required placeholder="e.g. 10.0.0.50">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="min-width: 100px;">
+                <label class="pf-v5-c-form__label" for="machine_ssh_user">
+                    <span class="pf-v5-c-form__label-text">SSH User</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="text" id="machine_ssh_user" name="machine_ssh_user"
+                           value="root" maxlength="32">
+                </div>
+            </div>
+            <div class="pf-v5-c-form__group" style="min-width: 80px; max-width: 90px;">
+                <label class="pf-v5-c-form__label" for="machine_ssh_port">
+                    <span class="pf-v5-c-form__label-text">SSH Port</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <input class="pf-v5-c-form-control" type="number" id="machine_ssh_port" name="machine_ssh_port"
+                           value="22" min="1" max="65535">
+                </div>
+            </div>
+            <button class="pf-v5-c-button pf-m-primary pf-m-small" type="submit" style="margin-bottom: 0.3rem;">Add Machine</button>
+        </form>
+        {% if lab_machines %}
+        <div style="overflow-x: auto;">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Hostname</th>
+                        <th>SSH</th>
+                        <th>Status</th>
+                        <th>Specs</th>
+                        <th>Added</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in lab_machines %}
+                    {% set specs = m.specs_json | tojson | default('{}') %}
+                    <tr>
+                        <td>
+                            <strong style="color: #73bcf7;">{{ m.name }}</strong>
+                            {% if m.role == 'boss' %}
+                            <span class="admin-role-badge admin-role-admin" style="margin-left:0.3rem;">Boss</span>
+                            {% else %}
+                            <span class="admin-role-badge admin-role-user" style="margin-left:0.3rem;">Peer</span>
+                            {% endif %}
+                        </td>
+                        <td><code style="font-size: 0.85rem; color: #c7c7c7;">{{ m.hostname }}</code></td>
+                        <td style="font-size: 0.8rem; color: #8a8d90;">{{ m.ssh_user }}:{{ m.ssh_port }}</td>
+                        <td>
+                            {% if m.status == 'ready' %}
+                            <span class="admin-status-badge admin-status-active">Ready</span>
+                            {% elif m.status == 'verifying' %}
+                            <span class="admin-status-badge" style="background:rgba(240,171,0,0.15);color:#f0ab00;border-color:rgba(240,171,0,0.3);">Verifying...</span>
+                            {% elif m.status == 'error' %}
+                            <span class="admin-status-badge admin-status-disabled" title="{{ m.status_detail }}">Error</span>
+                            {% else %}
+                            <span class="admin-status-badge" style="background:#292c30;color:#8a8d90;border-color:#3c3f42;">Pending</span>
+                            {% endif %}
+                            {% if m.status_detail and m.status == 'error' %}
+                            <div style="font-size:0.75rem;color:#c9190b;margin-top:0.2rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{{ m.status_detail }}">{{ m.status_detail[:60] }}</div>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 0.8rem; color: #8a8d90;">
+                            {% if m.status == 'ready' and m.specs %}
+                            {{ m.specs.cpus|default('?') }} CPUs, {{ m.specs.ram_gb|default('?') }}G RAM, {{ m.specs.storage_gb|default('?') }}G disk
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 0.8rem; color: #8a8d90; white-space: nowrap;">{{ m.added_at[:16] if m.added_at else '—' }}</td>
+                        <td>
+                            <div style="display: flex; gap: 0.4rem;">
+                                {% if m.role != 'boss' %}
+                                <form method="post" action="{{ url_for('admin_verify_machine', machine_id=m.id) }}" style="display:inline;">
+                                    <button type="submit" class="admin-action-btn admin-btn-reset">Verify</button>
+                                </form>
+                                <form method="post" action="{{ url_for('admin_remove_machine', machine_id=m.id) }}" style="display:inline;"
+                                      onsubmit="return confirm('Remove machine {{ m.name }}?');">
+                                    <button type="submit" class="admin-action-btn admin-btn-disable">Remove</button>
+                                </form>
+                                {% else %}
+                                <span style="font-size:0.8rem;color:#8a8d90;">Primary</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p style="color: #8a8d90; font-size: 0.85rem;">No remote machines added. Add one above to deploy SNO clusters on it.</p>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}

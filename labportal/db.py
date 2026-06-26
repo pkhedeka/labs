@@ -76,6 +76,20 @@ def init_db():
             requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             status TEXT NOT NULL DEFAULT 'pending'
         );
+
+        CREATE TABLE IF NOT EXISTS lab_machines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            hostname TEXT NOT NULL,
+            ssh_user TEXT NOT NULL DEFAULT 'root',
+            ssh_port INTEGER NOT NULL DEFAULT 22,
+            role TEXT NOT NULL DEFAULT 'peer',
+            status TEXT NOT NULL DEFAULT 'pending',
+            status_detail TEXT DEFAULT '',
+            specs_json TEXT DEFAULT '{}',
+            added_by TEXT NOT NULL,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
     # Migrations for existing databases
@@ -117,6 +131,37 @@ def init_db():
         conn.execute("SELECT must_change_password FROM users LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+
+    try:
+        conn.execute("SELECT machine_id FROM deployments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE deployments ADD COLUMN machine_id INTEGER")
+
+    try:
+        conn.execute("SELECT role FROM lab_machines LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE lab_machines ADD COLUMN role TEXT NOT NULL DEFAULT 'peer'")
+
+    boss = conn.execute("SELECT id FROM lab_machines WHERE role='boss'").fetchone()
+    if not boss:
+        import subprocess as _sp
+        specs = {"kvm": True, "libvirt": True}
+        try:
+            specs["cpus"] = int(_sp.run(["nproc"], capture_output=True, text=True).stdout.strip())
+            for line in _sp.run(["free", "-g"], capture_output=True, text=True).stdout.splitlines():
+                if line.startswith("Mem:"):
+                    specs["ram_gb"] = int(line.split()[1])
+            df = _sp.run(["df", "-BG", "--output=avail", "/kvm"], capture_output=True, text=True)
+            specs["storage_gb"] = int(df.stdout.strip().splitlines()[-1].strip().rstrip("G"))
+        except Exception:
+            pass
+        import json as _json
+        import socket as _sock
+        conn.execute(
+            "INSERT OR IGNORE INTO lab_machines (name, hostname, role, status, specs_json, added_by) "
+            "VALUES (?, ?, 'boss', 'ready', ?, 'system')",
+            (_sock.gethostname().split(".")[0], "localhost", _json.dumps(specs))
+        )
 
     conn.commit()
     conn.close()
