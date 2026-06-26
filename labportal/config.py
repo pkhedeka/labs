@@ -30,6 +30,14 @@ INSTALL_TYPES = {
         "ram_gb": 128,   # 3×32G + 2×16G
         "requires_slot": False,
     },
+    "sno": {
+        "label": "SNO (Single Node OpenShift)",
+        "script": os.environ.get("LABPORTAL_SNO_SCRIPT", "/root/labs/ocp-sno-deploy.sh"),
+        "vcpus": 8,
+        "ram_gb": 16,
+        "requires_slot": False,
+        "remote": True,
+    },
 }
 
 # IPI dynamic IP offset range (blocks of 10)

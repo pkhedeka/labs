@@ -79,7 +79,7 @@
                 <div class="pf-v5-c-form__group-control">
                     <select class="pf-v5-c-form-control" id="install_type" name="install_type" required onchange="toggleInstallType()">
                         {% for key, itype in install_types.items() %}
-                        <option value="{{ key }}" data-vcpus="{{ itype.vcpus }}" data-ram="{{ itype.ram_gb }}" data-slot="{{ itype.requires_slot|int }}">{{ itype.label }}</option>
+                        <option value="{{ key }}" data-vcpus="{{ itype.vcpus }}" data-ram="{{ itype.ram_gb }}" data-slot="{{ itype.requires_slot|int }}" data-remote="{{ itype.get('remote', False)|int }}">{{ itype.label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -118,6 +118,21 @@
                 <div class="pf-v5-c-form__group-control">
                     <input class="pf-v5-c-form-control" type="text" id="cluster_name_input" name="cluster_name_ipi"
                            placeholder="e.g. ipi1, dev" pattern="[a-z0-9][a-z0-9\-]{0,14}" maxlength="15">
+                </div>
+            </div>
+            <!-- SNO: target machine dropdown -->
+            <div class="pf-v5-c-form__group" id="machine-group" style="min-width: 140px; display: none;">
+                <label class="pf-v5-c-form__label" for="target_machine">
+                    <span class="pf-v5-c-form__label-text">Target Machine</span>
+                </label>
+                <div class="pf-v5-c-form__group-control">
+                    <select class="pf-v5-c-form-control" id="target_machine" name="target_machine">
+                        {% for m in lab_machines %}
+                        {% if m.status == 'ready' and m.role != 'boss' %}
+                        <option value="{{ m.id }}">{{ m.name }} ({{ m.specs.cpus|default('?') }} CPUs, {{ m.specs.ram_gb|default('?') }}G)</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
                 </div>
             </div>
             <div class="pf-v5-c-form__group" style="flex: 1; min-width: 140px;">
@@ -313,13 +328,15 @@ function toggleInstallType() {
     var sel = document.getElementById('install_type');
     var opt = sel.options[sel.selectedIndex];
     var requiresSlot = opt.getAttribute('data-slot') === '1';
+    var isRemote = opt.getAttribute('data-remote') === '1';
     var vcpus = opt.getAttribute('data-vcpus');
     var ram = opt.getAttribute('data-ram');
     document.getElementById('slot-group').style.display = requiresSlot ? '' : 'none';
     document.getElementById('name-group').style.display = requiresSlot ? 'none' : '';
-    // Toggle required/disabled so only the visible input submits
+    document.getElementById('machine-group').style.display = isRemote ? '' : 'none';
     document.getElementById('cluster_slot').disabled = !requiresSlot;
     document.getElementById('cluster_name_input').disabled = requiresSlot;
+    document.getElementById('target_machine').disabled = !isRemote;
     document.getElementById('resource-cost').textContent = vcpus + ' vCPUs, ' + ram + 'G RAM';
 }
 

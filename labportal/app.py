@@ -1101,7 +1101,18 @@ def user_dashboard():
     total_deployments = conn.execute(
         "SELECT COUNT(*) FROM activity_log WHERE event='cluster_deploy'"
     ).fetchone()[0]
+    lab_machines_raw = conn.execute(
+        "SELECT * FROM lab_machines WHERE status='ready' ORDER BY role DESC, name"
+    ).fetchall()
     conn.close()
+    lab_machines = []
+    for m in lab_machines_raw:
+        md = dict(m)
+        try:
+            md["specs"] = json.loads(m["specs_json"]) if m["specs_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            md["specs"] = {}
+        lab_machines.append(md)
     return render_template("user_dashboard.html",
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
@@ -1111,7 +1122,8 @@ def user_dashboard():
                            cluster_versions=cluster_versions,
                            cluster_info=cluster_info,
                            cluster_reservations=cluster_reservations,
-                           total_deployments=total_deployments)
+                           total_deployments=total_deployments,
+                           lab_machines=lab_machines)
 
 
 # --- Cluster Management ---
@@ -1175,15 +1187,36 @@ def cluster_create():
     itype = config.INSTALL_TYPES[install_type]
     vms, clusters, _ = get_lab_status()
 
+    target_machine = None
+    target_host = None
+    machine_id = None
+
     if install_type == "upi":
-        # UPI: validate cluster_name is a configured slot
         slots = config.cluster_slots()
         if cluster_name not in slots:
             flash(f"Invalid cluster slot '{cluster_name}'. Choose from: {', '.join(sorted(slots))}.", "danger")
             return redirect(url_for("user_dashboard"))
         ip_offset = slots[cluster_name]
+    elif install_type == "sno":
+        if not re.match(r'^[a-z0-9][a-z0-9\-]{0,14}$', cluster_name):
+            flash("Cluster name must be lowercase alphanumeric (may include hyphens), 1-15 characters.", "danger")
+            return redirect(url_for("user_dashboard"))
+        machine_id_raw = request.form.get("target_machine", "").strip()
+        if not machine_id_raw:
+            flash("Target machine is required for SNO deployment.", "danger")
+            return redirect(url_for("user_dashboard"))
+        conn = get_db()
+        target_machine = conn.execute(
+            "SELECT * FROM lab_machines WHERE id=? AND status='ready'", (machine_id_raw,)
+        ).fetchone()
+        conn.close()
+        if not target_machine:
+            flash("Selected target machine is not available.", "danger")
+            return redirect(url_for("user_dashboard"))
+        target_host = target_machine["hostname"]
+        machine_id = target_machine["id"]
+        ip_offset = 0
     else:
-        # IPI (and future types): cluster_name is user-provided
         if not re.match(r'^[a-z0-9][a-z0-9\-]{0,14}$', cluster_name):
             flash("Cluster name must be lowercase alphanumeric (may include hyphens), 1-15 characters.", "danger")
             return redirect(url_for("user_dashboard"))
@@ -1197,18 +1230,17 @@ def cluster_create():
         flash(f"Cluster '{cluster_name}' already exists.", "warning")
         return redirect(url_for("user_dashboard"))
 
-    # Check if another cluster's bootstrap is still running
-    for vm in vms:
-        if "bootstrap" in vm["name"] and vm["state"] == "running":
-            flash(f"Another deployment is in progress ({vm['name']} is still running). "
-                  "Please wait for it to finish before deploying a new cluster.", "warning")
-            return redirect(url_for("user_dashboard"))
+    if install_type != "sno":
+        for vm in vms:
+            if "bootstrap" in vm["name"] and vm["state"] == "running":
+                flash(f"Another deployment is in progress ({vm['name']} is still running). "
+                      "Please wait for it to finish before deploying a new cluster.", "warning")
+                return redirect(url_for("user_dashboard"))
 
-    # Resource check
-    ok, msg = _check_resources(install_type)
-    if not ok:
-        flash(f"Cannot deploy {itype['label']}: {msg}", "danger")
-        return redirect(url_for("user_dashboard"))
+        ok, msg = _check_resources(install_type)
+        if not ok:
+            flash(f"Cannot deploy {itype['label']}: {msg}", "danger")
+            return redirect(url_for("user_dashboard"))
 
     # Validate OCP version exists on the mirror
     mirror_url = f"https://mirror.openshift.com/pub/openshift-v4/clients/ocp/{ocp_version}/"
@@ -1232,9 +1264,13 @@ def cluster_create():
     try:
         env = os.environ.copy()
         env["BASE_DOMAIN"] = config.base_domain()
+        if install_type == "sno":
+            cmd = [deploy_script, ocp_version, cluster_name, target_host, target_machine["ssh_user"]]
+        else:
+            cmd = [deploy_script, ocp_version, cluster_name, str(ip_offset), network_type]
         with open(log_file, "w") as log_fd:
             proc = subprocess.Popen(
-                [deploy_script, ocp_version, cluster_name, str(ip_offset), network_type],
+                cmd,
                 stdout=log_fd,
                 stderr=subprocess.STDOUT,
                 cwd="/root",
@@ -1243,9 +1279,9 @@ def cluster_create():
             )
         conn = get_db()
         conn.execute(
-            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
-            "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?)",
-            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description)
+            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description, machine_id) "
+            "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?, ?)",
+            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description, machine_id)
         )
         conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
         conn.execute(
