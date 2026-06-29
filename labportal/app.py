@@ -1212,9 +1212,39 @@ def cluster_create():
     # Select deploy script for this install type
     deploy_script = itype["script"]
 
-    # Start deployment in background, detached from portal process
+    # Atomically claim the slot — prevents TOCTOU race when two users
+    # deploy the same cluster name concurrently.  The INSERT succeeds only
+    # if no active deployment exists for this cluster_name.
     log_file = f"/tmp/deploy-{cluster_name}-{ocp_version}.log"
+    user_email = session.get("user_email")
     try:
+        with get_db_ctx() as conn:
+            cur = conn.execute(
+                "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
+                "SELECT ?, ?, 'deploying', ?, NULL, ?, ?, ?, ? "
+                "WHERE NOT EXISTS (SELECT 1 FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed')) "
+                "AND NOT EXISTS (SELECT 1 FROM deployments WHERE ip_offset=? AND status IN ('deploying','completed'))",
+                (cluster_name, ocp_version, user_email, log_file, ip_offset, install_type, description, cluster_name, ip_offset)
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                flash(f"Cluster '{cluster_name}' is already being deployed.", "warning")
+                return redirect(url_for("user_dashboard"))
+            conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
+            conn.execute(
+                "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
+                "VALUES (?, ?, ?, datetime('now', '+' || ? || ' hours'))",
+                (cluster_name, user_email, description, str(reservation_hours))
+            )
+            if needs_extension:
+                conn.execute(
+                    "INSERT INTO cluster_extension_requests (cluster_name, requested_by, reason) "
+                    "VALUES (?, ?, ?)",
+                    (cluster_name, user_email, description)
+                )
+            conn.commit()
+
+        # Slot claimed — now start the subprocess
         env = os.environ.copy()
         env["BASE_DOMAIN"] = config.base_domain()
         with open(log_file, "w") as log_fd:
@@ -1227,23 +1257,8 @@ def cluster_create():
                 env=env
             )
         with get_db_ctx() as conn:
-            conn.execute(
-                "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
-                "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?)",
-                (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description)
-            )
-            conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
-            conn.execute(
-                "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
-                "VALUES (?, ?, ?, datetime('now', '+' || ? || ' hours'))",
-                (cluster_name, session.get("user_email"), description, str(reservation_hours))
-            )
-            if needs_extension:
-                conn.execute(
-                    "INSERT INTO cluster_extension_requests (cluster_name, requested_by, reason) "
-                    "VALUES (?, ?, ?)",
-                    (cluster_name, session.get("user_email"), description)
-                )
+            conn.execute("UPDATE deployments SET pid=? WHERE cluster_name=? AND status='deploying'",
+                         (proc.pid, cluster_name))
             conn.commit()
         log_activity("cluster_deploy", f"{cluster_name} {install_type.upper()} OCP {ocp_version} life {reservation_hours}h")
         _write_reservation_file()
