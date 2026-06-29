@@ -33,8 +33,13 @@ from flask import (
 )
 from flask_socketio import SocketIO, emit, disconnect
 
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+
 import config
 from db import get_db_ctx, init_db
+
+_ph = PasswordHasher()
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -73,6 +78,7 @@ signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
 # Active terminal sessions: sid -> {fd, pid, last_activity}
 terminal_sessions = {}
+_terminal_lock = threading.RLock()
 TERMINAL_TIMEOUT = 3600       # 1 hour inactivity timeout (seconds)
 TERMINAL_WARN_BEFORE = 300    # warn 5 minutes before timeout
 
@@ -81,18 +87,15 @@ TERMINAL_WARN_BEFORE = 300    # warn 5 minutes before timeout
 
 def hash_password(password, salt=None):
     """Hash password with argon2id. Legacy salt param ignored."""
-    from argon2 import PasswordHasher
-    return PasswordHasher().hash(password)
+    return _ph.hash(password)
 
 
 def verify_password(password, stored):
     """Verify password; transparently rehash legacy SHA-256 entries."""
     if stored.startswith("$argon2"):
-        from argon2 import PasswordHasher
-        from argon2.exceptions import VerifyMismatchError
         try:
-            return PasswordHasher().verify(stored, password)
-        except VerifyMismatchError:
+            return _ph.verify(stored, password)
+        except (VerifyMismatchError, VerificationError, InvalidHashError):
             return False
     # Legacy SHA-256 migration path
     salt, expected = stored.split(":", 1)
@@ -1513,6 +1516,11 @@ def _read_pty_output(sid, fd):
             if ready:
                 data = os.read(fd, 4096)
                 if data:
+                    # Output counts as activity (watch/top/tail -f keep session alive)
+                    with _terminal_lock:
+                        sess = terminal_sessions.get(sid)
+                    if sess:
+                        sess["last_activity"] = time.time()
                     socketio.emit("pty_output",
                                   {"output": data.decode("utf-8", errors="replace")},
                                   namespace="/terminal", to=sid)
@@ -1525,7 +1533,9 @@ def _read_pty_output(sid, fd):
 
 
 def _cleanup_terminal(sid):
-    sess = terminal_sessions.pop(sid, None)
+    # Idempotent — safe to call from reader thread, disconnect, and reaper.
+    with _terminal_lock:
+        sess = terminal_sessions.pop(sid, None)
     if sess:
         try:
             os.kill(sess["pid"], signal.SIGHUP)
@@ -1564,23 +1574,27 @@ def terminal_connect(auth=None):
     if pid == 0:
         # Child — become ocpterm with TERM set for curses (watch, top, vi)
         os.environ["TERM"] = "xterm-256color"
-        os.execlp("su", "su", "-", linux_user, "-w", "TERM")
+        try:
+            os.execlp("su", "su", "-", linux_user, "-w", "TERM")
+        except Exception as e:
+            os.write(2, f"exec failed: {e}\n".encode())
+            os._exit(1)
     else:
         try:
-            terminal_sessions[request.sid] = {
-                "fd": fd, "pid": pid,
-                "last_activity": time.time(), "warned": False
-            }
+            with _terminal_lock:
+                terminal_sessions[request.sid] = {
+                    "fd": fd, "pid": pid,
+                    "last_activity": time.time(), "warned": False
+                }
             _set_terminal_size(fd, 24, 80)
             socketio.start_background_task(_read_pty_output, request.sid, fd)
 
             if cluster:
                 kc_path = _find_kubeconfig(cluster)
                 if kc_path:
-                    time.sleep(0.5)
-                    cmd = f"export KUBECONFIG={kc_path}\n"
+                    # Shell reads this from stdin when ready — no sleep needed.
                     try:
-                        os.write(fd, cmd.encode())
+                        os.write(fd, f"export KUBECONFIG={kc_path}\n".encode())
                     except OSError:
                         pass
 
@@ -1591,9 +1605,9 @@ def terminal_connect(auth=None):
 
 @socketio.on("pty_input", namespace="/terminal")
 def terminal_input(data):
-    sess = terminal_sessions.get(request.sid)
+    with _terminal_lock:
+        sess = terminal_sessions.get(request.sid)
     if sess:
-        import time as _time
         sess["last_activity"] = time.time()
         sess["warned"] = False
         try:
@@ -1604,7 +1618,8 @@ def terminal_input(data):
 
 @socketio.on("resize", namespace="/terminal")
 def terminal_resize(data):
-    sess = terminal_sessions.get(request.sid)
+    with _terminal_lock:
+        sess = terminal_sessions.get(request.sid)
     if sess:
         try:
             _set_terminal_size(sess["fd"], data["rows"], data["cols"])
@@ -1623,7 +1638,9 @@ def _terminal_reaper():
     while True:
         _time.sleep(60)  # check every minute
         now = time.time()
-        for sid, sess in list(terminal_sessions.items()):
+        with _terminal_lock:
+            sessions_snapshot = list(terminal_sessions.items())
+        for sid, sess in sessions_snapshot:
             idle = now - sess["last_activity"]
 
             # Kill sessions idle beyond timeout
