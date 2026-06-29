@@ -1,17 +1,28 @@
 import sqlite3
 import os
+from contextlib import contextmanager
 from config import DB_PATH
 
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
+
+@contextmanager
+def get_db_ctx():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db():
     conn = get_db()
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS admin_config (
             key TEXT PRIMARY KEY,
