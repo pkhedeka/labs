@@ -149,6 +149,11 @@ def storage_dir():
     return get_site("storage_dir", "/kvm")
 
 # CORS — deploy-time, not portal-level; env var like other host constants
-CORS_ORIGINS = os.environ.get(
-    "LABPORTAL_CORS_ORIGINS", "https://lab.example.com"
-).split(",")
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "LABPORTAL_CORS_ORIGINS",
+        "https://lab.example.com"
+    ).split(",")
+    if origin.strip()
+]
