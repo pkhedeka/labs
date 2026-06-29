@@ -5,6 +5,7 @@ Lab Portal — lightweight web app for managing OCP lab access requests.
 import fcntl
 import glob
 import hashlib
+import hmac
 import json
 import os
 import pty
@@ -33,7 +34,7 @@ from flask import (
 from flask_socketio import SocketIO, emit, disconnect
 
 import config
-from db import get_db, init_db
+from db import get_db_ctx, init_db
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -63,7 +64,8 @@ class PrefixMiddleware:
 
 app.wsgi_app = PrefixMiddleware(app.wsgi_app, prefix="/labs")
 
-socketio = SocketIO(app, path="socket.io", cors_allowed_origins="*",
+socketio = SocketIO(app, path="socket.io",
+                    cors_allowed_origins=config.CORS_ORIGINS,
                     async_mode="threading")
 
 # Auto-reap child processes (prevents zombie terminals)
@@ -78,15 +80,26 @@ TERMINAL_WARN_BEFORE = 300    # warn 5 minutes before timeout
 # --- Helpers ---
 
 def hash_password(password, salt=None):
-    if salt is None:
-        salt = secrets.token_hex(16)
-    hashed = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-    return f"{salt}:{hashed}"
+    """Hash password with argon2id. Legacy salt param ignored."""
+    from argon2 import PasswordHasher
+    return PasswordHasher().hash(password)
 
 
 def verify_password(password, stored):
+    """Verify password; transparently rehash legacy SHA-256 entries."""
+    if stored.startswith("$argon2"):
+        from argon2 import PasswordHasher
+        from argon2.exceptions import VerifyMismatchError
+        try:
+            return PasswordHasher().verify(stored, password)
+        except VerifyMismatchError:
+            return False
+    # Legacy SHA-256 migration path
     salt, expected = stored.split(":", 1)
-    return hash_password(password, salt) == stored
+    legacy_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    if not hmac.compare_digest(f"{salt}:{legacy_hash}", stored):
+        return False
+    return True
 
 
 def get_admin_password_hash():
@@ -136,16 +149,15 @@ def login_required(admin_only=False):
 def log_activity(event, details=None):
     """Record an event in the activity_log table."""
     client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO activity_log (event, user_email, ip_address, details) VALUES (?, ?, ?, ?)",
-        (event,
-         session.get("user_email") or session.get("admin_user", ""),
-         client_ip,
-         details)
-    )
-    conn.commit()
-    conn.close()
+    with get_db_ctx() as conn:
+        conn.execute(
+            "INSERT INTO activity_log (event, user_email, ip_address, details) VALUES (?, ?, ?, ?)",
+            (event,
+             session.get("user_email") or session.get("admin_user", ""),
+             client_ip,
+             details)
+        )
+        conn.commit()
 
 
 def setup_required(f):
@@ -165,12 +177,11 @@ def generate_password(length=12):
 
 def get_cluster_info(clusters):
     """Get deployment metadata (creator, description, install_type) per cluster from DB."""
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT cluster_name, started_by, description, install_type, finished_at, started_at "
-        "FROM deployments WHERE status IN ('deploying','completed')"
-    ).fetchall()
-    conn.close()
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT cluster_name, started_by, description, install_type, finished_at, started_at "
+            "FROM deployments WHERE status IN ('deploying','completed')"
+        ).fetchall()
     info = {}
     for row in rows:
         info[row["cluster_name"]] = {
@@ -184,12 +195,11 @@ def get_cluster_info(clusters):
 
 def get_cluster_reservations():
     """Get active (non-expired) cluster reservations."""
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT cluster_name, reserved_by, purpose, reserved_until FROM cluster_reservations "
-        "WHERE reserved_until >= datetime('now')"
-    ).fetchall()
-    conn.close()
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT cluster_name, reserved_by, purpose, reserved_until FROM cluster_reservations "
+            "WHERE reserved_until >= datetime('now')"
+        ).fetchall()
     return {
         row["cluster_name"]: {
             "reserved_by": row["reserved_by"],
@@ -211,11 +221,10 @@ def _write_reservation_file():
 
 
 def get_cluster_versions(clusters):
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
-    ).fetchall()
-    conn.close()
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT cluster_name, ocp_version FROM deployments WHERE status IN ('deploying','completed')"
+        ).fetchall()
     versions = {row["cluster_name"]: row["ocp_version"] for row in rows}
     # Fill in missing versions by scanning disk (most recently modified first)
     for name in clusters:
@@ -434,13 +443,12 @@ def setup():
         config.reload_site_config()
         generate_infra_config()
 
-        conn = get_db()
-        conn.execute(
-            "INSERT OR IGNORE INTO users (email, first_name, last_name, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, 1, 1)",
-            (admin_email_addr, admin_username, "", hash_password(admin_password))
-        )
-        conn.commit()
-        conn.close()
+        with get_db_ctx() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO users (email, first_name, last_name, password_hash, is_active, is_admin) VALUES (?, ?, ?, ?, 1, 1)",
+                (admin_email_addr, admin_username, "", hash_password(admin_password))
+            )
+            conn.commit()
 
         flash("Setup complete! You can now log in as admin.", "success")
         return redirect(url_for("login"))
@@ -466,11 +474,10 @@ def api_status():
     cluster_versions = get_cluster_versions(clusters)
     cluster_info = get_cluster_info(clusters)
     cluster_reservations = get_cluster_reservations()
-    conn = get_db()
-    total_deployments = conn.execute(
-        "SELECT COUNT(*) FROM activity_log WHERE event='cluster_deploy'"
-    ).fetchone()[0]
-    conn.close()
+    with get_db_ctx() as conn:
+        total_deployments = conn.execute(
+            "SELECT COUNT(*) FROM activity_log WHERE event='cluster_deploy'"
+        ).fetchone()[0]
     return jsonify(vms=vms, clusters=clusters_data, resources=resources,
                    cluster_versions=cluster_versions, cluster_info=cluster_info,
                    cluster_reservations=cluster_reservations,
@@ -503,10 +510,9 @@ def admin_set_maintenance():
     if msg:
         config.set_site("maintenance_message", msg)
     else:
-        conn = get_db()
-        conn.execute("DELETE FROM admin_config WHERE key='maintenance_message'")
-        conn.commit()
-        conn.close()
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM admin_config WHERE key='maintenance_message'")
+            conn.commit()
         config._site_cache.pop("maintenance_message", None)
     return redirect(url_for("admin_panel"))
 
@@ -515,19 +521,18 @@ def admin_set_maintenance():
 @app.route("/admin")
 @login_required(admin_only=True)
 def admin_panel():
-    conn = get_db()
-    users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
-    reset_requests = conn.execute(
-        "SELECT r.*, u.id as user_id, u.first_name, u.last_name "
-        "FROM password_reset_requests r "
-        "LEFT JOIN users u ON r.email = u.email "
-        "WHERE r.status='pending' ORDER BY r.requested_at DESC"
-    ).fetchall()
-    extension_requests = conn.execute(
-        "SELECT * FROM cluster_extension_requests WHERE status='pending' ORDER BY requested_at DESC"
-    ).fetchall()
-    lab_machines_raw = conn.execute("SELECT * FROM lab_machines ORDER BY added_at DESC").fetchall()
-    conn.close()
+    with get_db_ctx() as conn:
+        users = conn.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+        reset_requests = conn.execute(
+            "SELECT r.*, u.id as user_id, u.first_name, u.last_name "
+            "FROM password_reset_requests r "
+            "LEFT JOIN users u ON r.email = u.email "
+            "WHERE r.status='pending' ORDER BY r.requested_at DESC"
+        ).fetchall()
+        extension_requests = conn.execute(
+            "SELECT * FROM cluster_extension_requests WHERE status='pending' ORDER BY requested_at DESC"
+        ).fetchall()
+        lab_machines_raw = conn.execute("SELECT * FROM lab_machines ORDER BY added_at DESC").fetchall()
     lab_machines = []
     for m in lab_machines_raw:
         md = dict(m)
@@ -550,26 +555,25 @@ def admin_activity():
     page = max(1, request.args.get("page", 1, type=int))
     per_page = 50
 
-    conn = get_db()
-    event_types = [r[0] for r in conn.execute(
-        "SELECT DISTINCT event FROM activity_log ORDER BY event"
-    ).fetchall()]
+    with get_db_ctx() as conn:
+        event_types = [r[0] for r in conn.execute(
+            "SELECT DISTINCT event FROM activity_log ORDER BY event"
+        ).fetchall()]
 
-    if event_filter:
-        total = conn.execute(
-            "SELECT COUNT(*) FROM activity_log WHERE event=?", (event_filter,)
-        ).fetchone()[0]
-        logs = conn.execute(
-            "SELECT * FROM activity_log WHERE event=? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (event_filter, per_page, (page - 1) * per_page)
-        ).fetchall()
-    else:
-        total = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
-        logs = conn.execute(
-            "SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (per_page, (page - 1) * per_page)
-        ).fetchall()
-    conn.close()
+        if event_filter:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM activity_log WHERE event=?", (event_filter,)
+            ).fetchone()[0]
+            logs = conn.execute(
+                "SELECT * FROM activity_log WHERE event=? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (event_filter, per_page, (page - 1) * per_page)
+            ).fetchall()
+        else:
+            total = conn.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+            logs = conn.execute(
+                "SELECT * FROM activity_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                (per_page, (page - 1) * per_page)
+            ).fetchall()
 
     total_pages = max(1, (total + per_page - 1) // per_page)
     return render_template("activity_log.html", logs=logs, total=total,
@@ -580,15 +584,13 @@ def admin_activity():
 @app.route("/admin/user/<int:user_id>/toggle", methods=["POST"])
 @login_required(admin_only=True)
 def admin_toggle_user(user_id):
-    conn = get_db()
-    user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    if not user:
-        conn.close()
-        abort(404)
-    new_status = 0 if user["is_active"] else 1
-    conn.execute("UPDATE users SET is_active=? WHERE id=?", (new_status, user_id))
-    conn.commit()
-    conn.close()
+    with get_db_ctx() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            abort(404)
+        new_status = 0 if user["is_active"] else 1
+        conn.execute("UPDATE users SET is_active=? WHERE id=?", (new_status, user_id))
+        conn.commit()
     action = "activated" if new_status else "deactivated"
     flash(f"User {user['first_name']} {user['last_name']} ({user['email']}) {action}.", "success")
     return redirect(url_for("admin_panel", status="all"))
@@ -597,18 +599,16 @@ def admin_toggle_user(user_id):
 @app.route("/admin/user/<int:user_id>/reset-password", methods=["POST"])
 @login_required(admin_only=True)
 def admin_reset_password(user_id):
-    conn = get_db()
-    user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-    if not user:
-        conn.close()
-        abort(404)
-    password = generate_password()
-    conn.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?",
-                 (hash_password(password), user_id))
-    conn.execute("UPDATE password_reset_requests SET status='completed' WHERE email=? AND status='pending'",
-                 (user["email"],))
-    conn.commit()
-    conn.close()
+    with get_db_ctx() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            abort(404)
+        password = generate_password()
+        conn.execute("UPDATE users SET password_hash=?, must_change_password=1 WHERE id=?",
+                     (hash_password(password), user_id))
+        conn.execute("UPDATE password_reset_requests SET status='completed' WHERE email=? AND status='pending'",
+                     (user["email"],))
+        conn.commit()
     full_name = f"{user['first_name']} {user['last_name']}"
     flash(f"Password reset for {full_name}. New password: {password}", "success")
     log_activity("admin_password_reset", f"Reset password for {user['email']}")
@@ -633,22 +633,20 @@ def admin_add_user():
         return redirect(url_for("admin_panel"))
     email = result
 
-    conn = get_db()
-    existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-    if existing:
-        conn.close()
-        flash(f"User with email {email} already exists.", "danger")
-        return redirect(url_for("admin_panel"))
+    with get_db_ctx() as conn:
+        existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        if existing:
+            flash(f"User with email {email} already exists.", "danger")
+            return redirect(url_for("admin_panel"))
 
-    password = generate_password()
-    linux_user = derive_linux_username(email)
-    conn.execute(
-        "INSERT INTO users (email, first_name, last_name, linux_username, password_hash, is_active, is_admin, must_change_password) "
-        "VALUES (?, ?, ?, ?, ?, 1, ?, 1)",
-        (email, first_name, last_name, linux_user, hash_password(password), 1 if make_admin else 0)
-    )
-    conn.commit()
-    conn.close()
+        password = generate_password()
+        linux_user = derive_linux_username(email)
+        conn.execute(
+            "INSERT INTO users (email, first_name, last_name, linux_username, password_hash, is_active, is_admin, must_change_password) "
+            "VALUES (?, ?, ?, ?, ?, 1, ?, 1)",
+            (email, first_name, last_name, linux_user, hash_password(password), 1 if make_admin else 0)
+        )
+        conn.commit()
 
     create_linux_user(linux_user, first_name, last_name)
     log_activity("user_created", f"{first_name} {last_name} ({email})")
@@ -668,21 +666,19 @@ def admin_approve_extension(req_id):
         flash("Extension must be 1-30 days.", "danger")
         return redirect(url_for("admin_panel"))
 
-    conn = get_db()
-    req = conn.execute("SELECT * FROM cluster_extension_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
-    if not req:
-        conn.close()
-        flash("Extension request not found or already handled.", "warning")
-        return redirect(url_for("admin_panel"))
+    with get_db_ctx() as conn:
+        req = conn.execute("SELECT * FROM cluster_extension_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
+        if not req:
+            flash("Extension request not found or already handled.", "warning")
+            return redirect(url_for("admin_panel"))
 
-    conn.execute(
-        "UPDATE cluster_reservations SET reserved_until = datetime(reserved_until, '+' || ? || ' days') "
-        "WHERE cluster_name=?",
-        (str(days), req["cluster_name"])
-    )
-    conn.execute("UPDATE cluster_extension_requests SET status='approved' WHERE id=?", (req_id,))
-    conn.commit()
-    conn.close()
+        conn.execute(
+            "UPDATE cluster_reservations SET reserved_until = datetime(reserved_until, '+' || ? || ' days') "
+            "WHERE cluster_name=?",
+            (str(days), req["cluster_name"])
+        )
+        conn.execute("UPDATE cluster_extension_requests SET status='approved' WHERE id=?", (req_id,))
+        conn.commit()
     _write_reservation_file()
     log_activity("extension_approved", f"{req['cluster_name']} +{days}d (requested by {req['requested_by']})")
     flash(f"Extended '{req['cluster_name']}' by {days} days.", "success")
@@ -692,15 +688,13 @@ def admin_approve_extension(req_id):
 @app.route("/admin/extension/<int:req_id>/deny", methods=["POST"])
 @login_required(admin_only=True)
 def admin_deny_extension(req_id):
-    conn = get_db()
-    req = conn.execute("SELECT * FROM cluster_extension_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
-    if not req:
-        conn.close()
-        flash("Extension request not found or already handled.", "warning")
-        return redirect(url_for("admin_panel"))
-    conn.execute("UPDATE cluster_extension_requests SET status='denied' WHERE id=?", (req_id,))
-    conn.commit()
-    conn.close()
+    with get_db_ctx() as conn:
+        req = conn.execute("SELECT * FROM cluster_extension_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
+        if not req:
+            flash("Extension request not found or already handled.", "warning")
+            return redirect(url_for("admin_panel"))
+        conn.execute("UPDATE cluster_extension_requests SET status='denied' WHERE id=?", (req_id,))
+        conn.commit()
     log_activity("extension_denied", f"{req['cluster_name']} (requested by {req['requested_by']})")
     flash(f"Extension request for '{req['cluster_name']}' denied.", "info")
     return redirect(url_for("admin_panel"))
@@ -708,9 +702,8 @@ def admin_deny_extension(req_id):
 
 def _verify_machine(machine_id):
     """SSH to a remote machine, check KVM/libvirt, collect specs, update DB."""
-    conn = get_db()
-    machine = conn.execute("SELECT * FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
-    conn.close()
+    with get_db_ctx() as conn:
+        machine = conn.execute("SELECT * FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
     if not machine:
         return
 
@@ -720,10 +713,9 @@ def _verify_machine(machine_id):
     ssh_base = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
                 "-p", str(ssh_port), f"{ssh_user}@{hostname}"]
 
-    conn = get_db()
-    conn.execute("UPDATE lab_machines SET status='verifying', status_detail='Connecting...' WHERE id=?", (machine_id,))
-    conn.commit()
-    conn.close()
+    with get_db_ctx() as conn:
+        conn.execute("UPDATE lab_machines SET status='verifying', status_detail='Connecting...' WHERE id=?", (machine_id,))
+        conn.commit()
 
     try:
         result = subprocess.run(ssh_base + ["echo SSH_OK"], capture_output=True, text=True, timeout=15)
@@ -745,27 +737,24 @@ def _verify_machine(machine_id):
                 specs[k.strip()] = v.strip()
 
         if specs.get("KVM") != "yes":
-            conn = get_db()
-            conn.execute("UPDATE lab_machines SET status='error', status_detail='No KVM support (/dev/kvm missing)' WHERE id=?", (machine_id,))
-            conn.commit()
-            conn.close()
+            with get_db_ctx() as conn:
+                conn.execute("UPDATE lab_machines SET status='error', status_detail='No KVM support (/dev/kvm missing)' WHERE id=?", (machine_id,))
+                conn.commit()
             return
 
         if specs.get("LIBVIRT") != "yes":
-            conn = get_db()
-            conn.execute("UPDATE lab_machines SET status='verifying', status_detail='Installing libvirt...' WHERE id=?", (machine_id,))
-            conn.commit()
-            conn.close()
+            with get_db_ctx() as conn:
+                conn.execute("UPDATE lab_machines SET status='verifying', status_detail='Installing libvirt...' WHERE id=?", (machine_id,))
+                conn.commit()
             install_result = subprocess.run(
                 ssh_base + ["dnf install -y libvirt qemu-kvm virt-install && systemctl enable --now libvirtd"],
                 capture_output=True, text=True, timeout=300
             )
             if install_result.returncode != 0:
-                conn = get_db()
-                conn.execute("UPDATE lab_machines SET status='error', status_detail=? WHERE id=?",
-                             (f"libvirt install failed: {install_result.stderr.strip()[:200]}", machine_id))
-                conn.commit()
-                conn.close()
+                with get_db_ctx() as conn:
+                    conn.execute("UPDATE lab_machines SET status='error', status_detail=? WHERE id=?",
+                                 (f"libvirt install failed: {install_result.stderr.strip()[:200]}", machine_id))
+                    conn.commit()
                 return
             specs["LIBVIRT"] = "yes"
 
@@ -777,18 +766,16 @@ def _verify_machine(machine_id):
             "libvirt": True,
         })
 
-        conn = get_db()
-        conn.execute("UPDATE lab_machines SET status='ready', status_detail='', specs_json=? WHERE id=?",
-                     (specs_json, machine_id))
-        conn.commit()
-        conn.close()
+        with get_db_ctx() as conn:
+            conn.execute("UPDATE lab_machines SET status='ready', status_detail='', specs_json=? WHERE id=?",
+                         (specs_json, machine_id))
+            conn.commit()
 
     except Exception as e:
-        conn = get_db()
-        conn.execute("UPDATE lab_machines SET status='error', status_detail=? WHERE id=?",
-                     (str(e)[:200], machine_id))
-        conn.commit()
-        conn.close()
+        with get_db_ctx() as conn:
+            conn.execute("UPDATE lab_machines SET status='error', status_detail=? WHERE id=?",
+                         (str(e)[:200], machine_id))
+            conn.commit()
 
 
 @app.route("/admin/machine/add", methods=["POST"])
@@ -815,19 +802,17 @@ def admin_add_machine():
         flash("Invalid SSH port.", "danger")
         return redirect(url_for("admin_panel"))
 
-    conn = get_db()
-    try:
-        conn.execute(
-            "INSERT INTO lab_machines (name, hostname, ssh_user, ssh_port, added_by) VALUES (?, ?, ?, ?, ?)",
-            (name, hostname, ssh_user, port, session.get("user_email"))
-        )
-        conn.commit()
-        machine_id = conn.execute("SELECT id FROM lab_machines WHERE name=?", (name,)).fetchone()["id"]
-    except sqlite3.IntegrityError:
-        conn.close()
-        flash(f"Machine '{name}' already exists.", "warning")
-        return redirect(url_for("admin_panel"))
-    conn.close()
+    with get_db_ctx() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO lab_machines (name, hostname, ssh_user, ssh_port, added_by) VALUES (?, ?, ?, ?, ?)",
+                (name, hostname, ssh_user, port, session.get("user_email"))
+            )
+            conn.commit()
+            machine_id = conn.execute("SELECT id FROM lab_machines WHERE name=?", (name,)).fetchone()["id"]
+        except sqlite3.IntegrityError:
+            flash(f"Machine '{name}' already exists.", "warning")
+            return redirect(url_for("admin_panel"))
 
     log_activity("machine_added", f"{name} ({hostname})")
     threading.Thread(target=_verify_machine, args=(machine_id,), daemon=True).start()
@@ -838,9 +823,8 @@ def admin_add_machine():
 @app.route("/admin/machine/<int:machine_id>/verify", methods=["POST"])
 @login_required(admin_only=True)
 def admin_verify_machine(machine_id):
-    conn = get_db()
-    machine = conn.execute("SELECT name FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
-    conn.close()
+    with get_db_ctx() as conn:
+        machine = conn.execute("SELECT name FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
     if not machine:
         flash("Machine not found.", "danger")
         return redirect(url_for("admin_panel"))
@@ -853,25 +837,22 @@ def admin_verify_machine(machine_id):
 @app.route("/admin/machine/<int:machine_id>/remove", methods=["POST"])
 @login_required(admin_only=True)
 def admin_remove_machine(machine_id):
-    conn = get_db()
-    machine = conn.execute("SELECT name FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
-    if not machine:
-        conn.close()
-        flash("Machine not found.", "danger")
-        return redirect(url_for("admin_panel"))
+    with get_db_ctx() as conn:
+        machine = conn.execute("SELECT name FROM lab_machines WHERE id=?", (machine_id,)).fetchone()
+        if not machine:
+            flash("Machine not found.", "danger")
+            return redirect(url_for("admin_panel"))
 
-    active = conn.execute(
-        "SELECT COUNT(*) FROM deployments WHERE machine_id=? AND status IN ('deploying','completed')",
-        (machine_id,)
-    ).fetchone()[0]
-    if active > 0:
-        conn.close()
-        flash(f"Cannot remove '{machine['name']}' — {active} active cluster(s) deployed on it.", "danger")
-        return redirect(url_for("admin_panel"))
+        active = conn.execute(
+            "SELECT COUNT(*) FROM deployments WHERE machine_id=? AND status IN ('deploying','completed')",
+            (machine_id,)
+        ).fetchone()[0]
+        if active > 0:
+            flash(f"Cannot remove '{machine['name']}' — {active} active cluster(s) deployed on it.", "danger")
+            return redirect(url_for("admin_panel"))
 
-    conn.execute("DELETE FROM lab_machines WHERE id=?", (machine_id,))
-    conn.commit()
-    conn.close()
+        conn.execute("DELETE FROM lab_machines WHERE id=?", (machine_id,))
+        conn.commit()
     log_activity("machine_removed", machine["name"])
     flash(f"Machine '{machine['name']}' removed.", "success")
     return redirect(url_for("admin_panel"))
@@ -964,13 +945,19 @@ def user_login():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
 
-        conn = get_db()
-        user = conn.execute(
-            "SELECT * FROM users WHERE email=? AND is_active=1", (email,)
-        ).fetchone()
-        conn.close()
+        with get_db_ctx() as conn:
+            user = conn.execute(
+                "SELECT * FROM users WHERE email=? AND is_active=1", (email,)
+            ).fetchone()
 
         if user and verify_password(password, user["password_hash"]):
+            if not user["password_hash"].startswith("$argon2"):
+                with get_db_ctx() as rehash_conn:
+                    rehash_conn.execute(
+                        "UPDATE users SET password_hash=? WHERE id=?",
+                        (hash_password(password), user["id"])
+                    )
+                    rehash_conn.commit()
             session["user_email"] = user["email"]
             session["user_name"] = f"{user['first_name']} {user['last_name']}"
             if user["is_admin"]:
@@ -1001,15 +988,14 @@ def user_logout():
 def forgot_password():
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
-        conn = get_db()
-        user = conn.execute("SELECT id FROM users WHERE email=? AND is_active=1", (email,)).fetchone()
-        if user:
-            conn.execute(
-                "INSERT INTO password_reset_requests (email) VALUES (?)",
-                (email,)
-            )
-            conn.commit()
-        conn.close()
+        with get_db_ctx() as conn:
+            user = conn.execute("SELECT id FROM users WHERE email=? AND is_active=1", (email,)).fetchone()
+            if user:
+                conn.execute(
+                    "INSERT INTO password_reset_requests (email) VALUES (?)",
+                    (email,)
+                )
+                conn.commit()
         flash("Password reset request submitted. An admin will reset your password shortly.", "success")
         return redirect(url_for("user_login"))
     return render_template("forgot_password.html")
@@ -1031,13 +1017,12 @@ def change_password():
             flash("Passwords do not match.", "danger")
             return render_template("reset_password.html", force_change=True)
 
-        conn = get_db()
-        conn.execute(
-            "UPDATE users SET password_hash=?, must_change_password=0 WHERE email=?",
-            (hash_password(password), session["user_email"])
-        )
-        conn.commit()
-        conn.close()
+        with get_db_ctx() as conn:
+            conn.execute(
+                "UPDATE users SET password_hash=?, must_change_password=0 WHERE email=?",
+                (hash_password(password), session["user_email"])
+            )
+            conn.commit()
         session.pop("force_password_change", None)
         log_activity("password_changed", "User set own password")
         flash("Password updated successfully.", "success")
@@ -1049,11 +1034,10 @@ def change_password():
 def _find_next_ipi_offset(clusters):
     """Find the next available IPI IP offset (blocks of 10 from 140-190)."""
     # Collect used offsets from DB
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT ip_offset FROM deployments WHERE install_type='ipi' AND status IN ('deploying','completed')"
-    ).fetchall()
-    conn.close()
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT ip_offset FROM deployments WHERE install_type='ipi' AND status IN ('deploying','completed')"
+        ).fetchall()
     used_offsets = {row["ip_offset"] for row in rows if row["ip_offset"]}
     # Also check running VMs to catch manually deployed clusters
     for name in clusters:
@@ -1097,11 +1081,10 @@ def user_dashboard():
     cluster_versions = get_cluster_versions(clusters)
     cluster_info = get_cluster_info(clusters)
     cluster_reservations = get_cluster_reservations()
-    conn = get_db()
-    total_deployments = conn.execute(
-        "SELECT COUNT(*) FROM activity_log WHERE event='cluster_deploy'"
-    ).fetchone()[0]
-    conn.close()
+    with get_db_ctx() as conn:
+        total_deployments = conn.execute(
+            "SELECT COUNT(*) FROM activity_log WHERE event='cluster_deploy'"
+        ).fetchone()[0]
     return render_template("user_dashboard.html",
                            vms=vms, clusters=clusters, resources=resources,
                            cluster_slots=sorted(slots.keys()),
@@ -1124,12 +1107,11 @@ def cluster_kubeconfig(cluster_name):
         abort(400)
     kubeconfig_path = None
     # Try DB first for the exact path
-    conn = get_db()
-    dep = conn.execute(
-        "SELECT cluster_name, ocp_version FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
-        (cluster_name,)
-    ).fetchone()
-    conn.close()
+    with get_db_ctx() as conn:
+        dep = conn.execute(
+            "SELECT cluster_name, ocp_version FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
+            (cluster_name,)
+        ).fetchone()
     if dep:
         kubeconfig_path = f"{config.storage_dir()}/clusters/{dep['cluster_name']}-{dep['ocp_version']}/auth/kubeconfig"
     if not kubeconfig_path or not os.path.isfile(kubeconfig_path):
@@ -1241,26 +1223,25 @@ def cluster_create():
                 start_new_session=True,
                 env=env
             )
-        conn = get_db()
-        conn.execute(
-            "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
-            "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?)",
-            (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description)
-        )
-        conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
-        conn.execute(
-            "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
-            "VALUES (?, ?, ?, datetime('now', '+' || ? || ' hours'))",
-            (cluster_name, session.get("user_email"), description, str(reservation_hours))
-        )
-        if needs_extension:
+        with get_db_ctx() as conn:
             conn.execute(
-                "INSERT INTO cluster_extension_requests (cluster_name, requested_by, reason) "
-                "VALUES (?, ?, ?)",
-                (cluster_name, session.get("user_email"), description)
+                "INSERT INTO deployments (cluster_name, ocp_version, status, started_by, pid, log_file, ip_offset, install_type, description) "
+                "VALUES (?, ?, 'deploying', ?, ?, ?, ?, ?, ?)",
+                (cluster_name, ocp_version, session.get("user_email"), proc.pid, log_file, ip_offset, install_type, description)
             )
-        conn.commit()
-        conn.close()
+            conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
+            conn.execute(
+                "INSERT INTO cluster_reservations (cluster_name, reserved_by, purpose, reserved_until) "
+                "VALUES (?, ?, ?, datetime('now', '+' || ? || ' hours'))",
+                (cluster_name, session.get("user_email"), description, str(reservation_hours))
+            )
+            if needs_extension:
+                conn.execute(
+                    "INSERT INTO cluster_extension_requests (cluster_name, requested_by, reason) "
+                    "VALUES (?, ?, ?)",
+                    (cluster_name, session.get("user_email"), description)
+                )
+            conn.commit()
         log_activity("cluster_deploy", f"{cluster_name} {install_type.upper()} OCP {ocp_version} life {reservation_hours}h")
         _write_reservation_file()
         life_msg = f"reserved for {reservation_hours}h"
@@ -1275,12 +1256,11 @@ def cluster_create():
 
 def _delete_cluster_internal(cluster_name, cluster_vms):
     """Delete a cluster's VMs, storage, and DB records. Returns list of errors."""
-    conn = get_db()
-    dep = conn.execute(
-        "SELECT install_type, ip_offset FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
-        (cluster_name,)
-    ).fetchone()
-    conn.close()
+    with get_db_ctx() as conn:
+        dep = conn.execute(
+            "SELECT install_type, ip_offset FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
+            (cluster_name,)
+        ).fetchone()
     dep_install_type = dep["install_type"] if dep and dep["install_type"] else "upi"
     dep_ip_offset = dep["ip_offset"] if dep else None
 
@@ -1373,20 +1353,19 @@ def _delete_cluster_internal(cluster_name, cluster_vms):
         except Exception:
             pass
 
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT log_file FROM deployments WHERE cluster_name=?", (cluster_name,)
-    ).fetchall()
-    for row in rows:
-        if row["log_file"]:
-            try:
-                os.remove(row["log_file"])
-            except OSError:
-                pass
-    conn.execute("DELETE FROM deployments WHERE cluster_name=?", (cluster_name,))
-    conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
-    conn.commit()
-    conn.close()
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT log_file FROM deployments WHERE cluster_name=?", (cluster_name,)
+        ).fetchall()
+        for row in rows:
+            if row["log_file"]:
+                try:
+                    os.remove(row["log_file"])
+                except OSError:
+                    pass
+        conn.execute("DELETE FROM deployments WHERE cluster_name=?", (cluster_name,))
+        conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (cluster_name,))
+        conn.commit()
 
     for cluster_dir in glob.glob(f"{config.storage_dir()}/clusters/{cluster_name}-*"):
         if os.path.isdir(cluster_dir):
@@ -1416,12 +1395,11 @@ def cluster_delete():
 
     # Non-admin users can only delete clusters they created
     if not session.get("admin"):
-        conn = get_db()
-        dep = conn.execute(
-            "SELECT started_by FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
-            (cluster_name,)
-        ).fetchone()
-        conn.close()
+        with get_db_ctx() as conn:
+            dep = conn.execute(
+                "SELECT started_by FROM deployments WHERE cluster_name=? AND status IN ('deploying','completed') LIMIT 1",
+                (cluster_name,)
+            ).fetchone()
         if dep and dep["started_by"] != session.get("user_email"):
             flash("You can only delete clusters you created.", "danger")
             return redirect(url_for("user_dashboard"))
@@ -1442,12 +1420,11 @@ def cluster_delete():
 def cluster_logs(cluster_name):
     if not session.get("user_email") and not session.get("admin"):
         return redirect(url_for("user_login"))
-    conn = get_db()
-    dep = conn.execute(
-        "SELECT * FROM deployments WHERE cluster_name=? ORDER BY started_at DESC LIMIT 1",
-        (cluster_name,)
-    ).fetchone()
-    conn.close()
+    with get_db_ctx() as conn:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE cluster_name=? ORDER BY started_at DESC LIMIT 1",
+            (cluster_name,)
+        ).fetchone()
 
     if not dep or not dep["log_file"]:
         flash(f"No logs found for cluster '{cluster_name}'.", "warning")
@@ -1629,11 +1606,10 @@ def _cluster_lifetime_reaper():
     while True:
         time.sleep(300)
         try:
-            conn = get_db()
-            expired = conn.execute(
-                "SELECT cluster_name FROM cluster_reservations WHERE reserved_until < datetime('now')"
-            ).fetchall()
-            conn.close()
+            with get_db_ctx() as conn:
+                expired = conn.execute(
+                    "SELECT cluster_name FROM cluster_reservations WHERE reserved_until < datetime('now')"
+                ).fetchall()
             if not expired:
                 continue
             _, clusters, _ = get_lab_status()
@@ -1641,19 +1617,17 @@ def _cluster_lifetime_reaper():
                 name = row["cluster_name"]
                 if name in clusters:
                     _delete_cluster_internal(name, clusters[name])
-                    conn2 = get_db()
-                    conn2.execute(
-                        "INSERT INTO activity_log (event, user_email, ip_address, details) VALUES (?, ?, ?, ?)",
-                        ("cluster_auto_delete", "system", "127.0.0.1", f"{name} (lifetime expired)")
-                    )
-                    conn2.commit()
-                    conn2.close()
+                    with get_db_ctx() as conn2:
+                        conn2.execute(
+                            "INSERT INTO activity_log (event, user_email, ip_address, details) VALUES (?, ?, ?, ?)",
+                            ("cluster_auto_delete", "system", "127.0.0.1", f"{name} (lifetime expired)")
+                        )
+                        conn2.commit()
                 else:
-                    conn = get_db()
-                    conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (name,))
-                    conn.execute("DELETE FROM deployments WHERE cluster_name=?", (name,))
-                    conn.commit()
-                    conn.close()
+                    with get_db_ctx() as conn:
+                        conn.execute("DELETE FROM cluster_reservations WHERE cluster_name=?", (name,))
+                        conn.execute("DELETE FROM deployments WHERE cluster_name=?", (name,))
+                        conn.commit()
         except Exception:
             pass
 

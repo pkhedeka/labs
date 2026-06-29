@@ -1,12 +1,14 @@
 import json
 import os
 import secrets
+import threading
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Flask secret — only this and DB_PATH remain as file-level constants.
-# Everything else is stored in the database after first-run setup.
-SECRET_KEY = os.environ.get("LABPORTAL_SECRET_KEY", secrets.token_hex(32))
+_secret = os.environ.get("LABPORTAL_SECRET_KEY")
+if not _secret and os.environ.get("FLASK_ENV") != "development":
+    raise RuntimeError("LABPORTAL_SECRET_KEY must be set in production")
+SECRET_KEY = _secret or secrets.token_hex(32)
 
 # Database path — must be known before DB exists
 DB_PATH = os.environ.get("LABPORTAL_DB", os.path.join(BASE_DIR, "labportal.db"))
@@ -47,63 +49,66 @@ IPI_OFFSET_STEP = 10
 
 _site_cache = {}
 _site_loaded = False
+_site_lock = threading.RLock()
 
 
-def _db_conn():
+def _db_ctx():
     """Lazy import to avoid circular dependency with db.py."""
-    from db import get_db
-    return get_db()
+    from db import get_db_ctx
+    return get_db_ctx()
 
 
 def load_site_config():
     """Load all admin_config rows into the in-memory cache."""
     global _site_cache, _site_loaded
-    try:
-        conn = _db_conn()
-        rows = conn.execute("SELECT key, value FROM admin_config").fetchall()
-        conn.close()
-        _site_cache = {row["key"]: row["value"] for row in rows}
-    except Exception:
-        _site_cache = {}
-    _site_loaded = True
+    with _site_lock:
+        try:
+            with _db_ctx() as conn:
+                rows = conn.execute("SELECT key, value FROM admin_config").fetchall()
+            _site_cache = {row["key"]: row["value"] for row in rows}
+        except Exception:
+            _site_cache = {}
+        _site_loaded = True
 
 
 def get_site(key, default=None):
     """Read a site config value (cached)."""
-    if not _site_loaded:
-        load_site_config()
-    return _site_cache.get(key, default)
+    with _site_lock:
+        if not _site_loaded:
+            load_site_config()
+        return _site_cache.get(key, default)
 
 
 def set_site(key, value):
     """Write a site config value to DB and update cache."""
-    conn = _db_conn()
-    conn.execute(
-        "INSERT OR REPLACE INTO admin_config (key, value) VALUES (?, ?)",
-        (key, value)
-    )
-    conn.commit()
-    conn.close()
-    _site_cache[key] = value
+    with _db_ctx() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO admin_config (key, value) VALUES (?, ?)",
+            (key, value)
+        )
+        conn.commit()
+    with _site_lock:
+        _site_cache[key] = value
 
 
 def set_site_bulk(data: dict):
     """Write multiple site config values at once."""
-    conn = _db_conn()
-    for k, v in data.items():
-        conn.execute(
-            "INSERT OR REPLACE INTO admin_config (key, value) VALUES (?, ?)",
-            (k, v)
-        )
-    conn.commit()
-    conn.close()
-    _site_cache.update(data)
+    with _db_ctx() as conn:
+        for k, v in data.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO admin_config (key, value) VALUES (?, ?)",
+                (k, v)
+            )
+        conn.commit()
+    with _site_lock:
+        _site_cache.update(data)
 
 
 def reload_site_config():
     """Force-reload config from DB (e.g. after admin edits settings)."""
     global _site_loaded
-    _site_loaded = False
+    with _site_lock:
+        _site_loaded = False
     load_site_config()
 
 
@@ -142,3 +147,8 @@ def lab_hostname():
 
 def storage_dir():
     return get_site("storage_dir", "/kvm")
+
+# CORS — deploy-time, not portal-level; env var like other host constants
+CORS_ORIGINS = os.environ.get(
+    "LABPORTAL_CORS_ORIGINS", "https://lab.example.com"
+).split(",")
