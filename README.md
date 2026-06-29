@@ -289,7 +289,8 @@ All settings via environment variables (or defaults in `config.py`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LABPORTAL_SECRET_KEY` | random | Flask session secret |
+| `LABPORTAL_SECRET_KEY` | *(required in prod)* | Flask session secret — app refuses to start without it unless `FLASK_ENV=development` |
+| `LABPORTAL_CORS_ORIGINS` | `https://lab.example.com` | Allowed CORS origins for SocketIO (comma-separated for multiple) |
 | `LABPORTAL_ADMIN_USER` | `admin` | Admin login username |
 | `LABPORTAL_DB` | `labportal/labportal.db` | SQLite database path |
 | `LABPORTAL_HOSTNAME` | `lab.example.com` | Hostname shown in UI |
