@@ -1273,6 +1273,32 @@ def cluster_create():
     return redirect(url_for("user_dashboard"))
 
 
+def _destroy_ipi_bootstrap(infra_id, errors=None):
+    """Destroy and undefine any VMs created by the IPI installer for a given infra ID."""
+    if errors is None:
+        errors = []
+    try:
+        result = subprocess.run(["virsh", "list", "--all", "--name"],
+                                capture_output=True, text=True, timeout=10)
+        for vm_name in result.stdout.strip().splitlines():
+            vm_name = vm_name.strip()
+            if vm_name and vm_name.startswith(f"{infra_id}-"):
+                subprocess.run(["virsh", "destroy", vm_name],
+                               capture_output=True, timeout=10)
+                result2 = subprocess.run(
+                    ["virsh", "undefine", vm_name, "--remove-all-storage", "--nvram"],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result2.returncode != 0:
+                    subprocess.run(
+                        ["virsh", "undefine", vm_name, "--remove-all-storage"],
+                        capture_output=True, timeout=10
+                    )
+    except Exception as e:
+        errors.append(f"IPI bootstrap cleanup ({infra_id}): {e}")
+    return errors
+
+
 def _delete_cluster_internal(cluster_name, cluster_vms):
     """Delete a cluster's VMs, storage, and DB records. Returns list of errors."""
     conn = get_db()
@@ -1306,6 +1332,22 @@ def _delete_cluster_internal(cluster_name, cluster_vms):
         mac_base = f"{dep_ip_offset:02x}"
         num_masters = 3
         num_workers = 2
+
+        # Read IPI infra ID from install dir metadata and destroy bootstrap/pools
+        infra_id = None
+        for install_dir in glob.glob(f"{config.storage_dir()}/clusters/{cluster_name}-*"):
+            meta_file = os.path.join(install_dir, "metadata.json")
+            if os.path.isfile(meta_file):
+                try:
+                    with open(meta_file) as mf:
+                        infra_id = json.loads(mf.read()).get("infraID")
+                except Exception:
+                    pass
+                if infra_id:
+                    break
+
+        if infra_id:
+            _destroy_ipi_bootstrap(infra_id, errors)
 
         for role, count, port_offset in [("master", num_masters, 0), ("worker", num_workers, num_masters)]:
             for i in range(count):
@@ -1352,7 +1394,7 @@ def _delete_cluster_internal(cluster_name, cluster_vms):
                 pool_name = pool_name.strip()
                 if not pool_name or pool_name in ("default", "images"):
                     continue
-                if cluster_name in pool_name:
+                if cluster_name in pool_name or (infra_id and infra_id in pool_name):
                     subprocess.run(["virsh", "pool-destroy", pool_name],
                                    capture_output=True, timeout=10)
                     subprocess.run(["virsh", "pool-undefine", pool_name],
@@ -1360,12 +1402,15 @@ def _delete_cluster_internal(cluster_name, cluster_vms):
         except Exception as e:
             errors.append(f"pool cleanup: {e}")
 
-        for img_dir in glob.glob(f"{config.storage_dir()}/libvirt-images/{cluster_name}-*"):
-            if os.path.isdir(img_dir):
-                try:
-                    shutil.rmtree(img_dir)
-                except Exception as e:
-                    errors.append(f"bootstrap image cleanup: {e}")
+        for pattern in (f"{cluster_name}-*", f"{infra_id}-*" if infra_id else None):
+            if not pattern:
+                continue
+            for img_dir in glob.glob(f"{config.storage_dir()}/libvirt-images/{pattern}"):
+                if os.path.isdir(img_dir):
+                    try:
+                        shutil.rmtree(img_dir)
+                    except Exception as e:
+                        errors.append(f"bootstrap image cleanup: {e}")
 
         try:
             subprocess.run(["systemctl", "reload", "named"],
@@ -1658,9 +1703,88 @@ def _cluster_lifetime_reaper():
             pass
 
 
+def _orphan_bootstrap_reaper():
+    """Catch any IPI bootstrap VMs left behind after cluster deletion or failed installs.
+
+    Any VM with '-bootstrap' in its name that has been running for over 2 hours
+    and is not associated with an active 'deploying' cluster gets destroyed.
+    """
+    BOOTSTRAP_MAX_AGE_SECS = 7200  # 2 hours
+    while True:
+        time.sleep(600)  # check every 10 minutes
+        try:
+            # Check if any cluster is actively deploying — bootstrap is expected during install
+            conn = get_db()
+            deploying = conn.execute(
+                "SELECT cluster_name FROM deployments WHERE status='deploying'"
+            ).fetchall()
+            conn.close()
+            deploying_names = {row["cluster_name"] for row in deploying}
+
+            result = subprocess.run(["virsh", "list", "--name"],
+                                    capture_output=True, text=True, timeout=10)
+            for vm_name in result.stdout.strip().splitlines():
+                vm_name = vm_name.strip()
+                if not vm_name or "-bootstrap" not in vm_name:
+                    continue
+                # Skip if a deployment is in progress — bootstrap is expected
+                if deploying_names:
+                    continue
+                # Check how long this VM has been running (process uptime)
+                try:
+                    pid_result = subprocess.run(
+                        ["pgrep", "-f", vm_name],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    pids = pid_result.stdout.strip().splitlines()
+                    if not pids:
+                        continue
+                    stat_result = subprocess.run(
+                        ["ps", "-o", "etimes=", "-p", pids[0]],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    elapsed = int(stat_result.stdout.strip())
+                    if elapsed < BOOTSTRAP_MAX_AGE_SECS:
+                        continue
+                except Exception:
+                    continue
+
+                subprocess.run(["virsh", "destroy", vm_name],
+                               capture_output=True, timeout=10)
+                subprocess.run(
+                    ["virsh", "undefine", vm_name, "--remove-all-storage", "--nvram"],
+                    capture_output=True, timeout=10
+                )
+                # Clean up associated storage pools
+                try:
+                    infra_id = vm_name.rsplit("-bootstrap", 1)[0]
+                    pool_result = subprocess.run(["virsh", "pool-list", "--all", "--name"],
+                                                 capture_output=True, text=True, timeout=10)
+                    for pool_name in pool_result.stdout.strip().splitlines():
+                        pool_name = pool_name.strip()
+                        if pool_name and infra_id in pool_name:
+                            subprocess.run(["virsh", "pool-destroy", pool_name],
+                                           capture_output=True, timeout=10)
+                            subprocess.run(["virsh", "pool-undefine", pool_name],
+                                           capture_output=True, timeout=10)
+                except Exception:
+                    pass
+
+                conn2 = get_db()
+                conn2.execute(
+                    "INSERT INTO activity_log (event, user_email, ip_address, details) VALUES (?, ?, ?, ?)",
+                    ("bootstrap_auto_cleanup", "system", "127.0.0.1", f"orphan {vm_name} destroyed (running >{BOOTSTRAP_MAX_AGE_SECS // 3600}h)")
+                )
+                conn2.commit()
+                conn2.close()
+        except Exception:
+            pass
+
+
 # Start the reaper threads
 threading.Thread(target=_terminal_reaper, daemon=True).start()
 threading.Thread(target=_cluster_lifetime_reaper, daemon=True).start()
+threading.Thread(target=_orphan_bootstrap_reaper, daemon=True).start()
 
 
 # --- CLI ---
